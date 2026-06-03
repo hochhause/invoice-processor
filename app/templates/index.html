@@ -57,8 +57,8 @@
       <button class="btn btn-ai" id="btn-run-ai" onclick="runAiAll()" style="display:none" title="Re-process script-flagged invoices with AI">
         <span>🤖</span> Run AI on all flagged
       </button>
-      <button class="btn btn-secondary" id="btn-dev-fill" onclick="fillFormWithDevData()" title="[DEV ONLY] Fill form with random test data">
-        <span>⚙️</span> [DEV] Fill random
+      <button class="btn btn-secondary" id="btn-dev-fill" onclick="fillAllWithDevData()" title="[DEV] Auto-fill all incomplete invoices">
+        <span>⚙️</span> [DEV] Fill all
       </button>
       <button class="btn btn-secondary" onclick="clearAllInvoices()" title="Delete all invoices">
         <span>🗑️</span> Clear all
@@ -167,6 +167,9 @@
 
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn btn-secondary" id="btn-modal-dev-fill" onclick="fillCurrentWithDevData()" title="[DEV] Auto-fill missing fields">
+            <span>⚙️</span> [DEV] Fill
+          </button>
           <button type="submit" class="btn btn-primary">Save &amp; Mark Reviewed</button>
         </div>
       </form>
@@ -423,14 +426,8 @@ async function runAiAll() {
   refreshJobs();
 }
 
-async function fillFormWithDevData() {
-  if (!modal.open) {
-    alert('[DEV] Open an invoice modal first (click edit icon or review badge)');
-    return;
-  }
-  if (!confirm('[DEV] Fill form with random test data and save?')) return;
-
-  const devData = {
+function _generateDevData() {
+  return {
     invoice_id: `INV-${Math.random().toString(36).substr(2, 8).toUpperCase()}`,
     receiver: ['Acme Corp', 'Global Tech Inc', 'Swift Finance Ltd', 'Digital Solutions AG'][Math.floor(Math.random() * 4)],
     amount: (Math.random() * 9000 + 100).toFixed(2),
@@ -442,7 +439,16 @@ async function fillFormWithDevData() {
     plusgiro: Math.random().toString().substr(2, 10),
     reference: `REF-${Math.floor(Math.random() * 99999)}`
   };
+}
 
+async function fillCurrentWithDevData() {
+  if (!modal.open) {
+    alert('[DEV] Open an invoice modal first');
+    return;
+  }
+  if (!confirm('[DEV] Auto-fill missing fields and save?')) return;
+
+  const devData = _generateDevData();
   for (const field in devData) {
     const input = document.getElementById(`f-${field.replace(/_/g, '-')}`);
     if (input) input.value = devData[field];
@@ -455,6 +461,34 @@ async function fillFormWithDevData() {
   }
   await fetch(`/api/review/${jobId}`, { method: 'POST', body: fd });
   closeModal();
+  refreshJobs();
+}
+
+async function fillAllWithDevData() {
+  if (!confirm('[DEV] Auto-fill and save all incomplete invoices?')) return;
+  const r = await fetch('/api/jobs');
+  const jobs = await r.json();
+  const incomplete = jobs.filter(j => j.needs_review === 'YES' || !j.invoice_id || !j.amount || !j.currency);
+  if (incomplete.length === 0) {
+    alert('[DEV] No incomplete invoices found');
+    return;
+  }
+  document.getElementById('upload-status').textContent = `Filling ${incomplete.length} invoice(s)...`;
+  let saved = 0;
+  for (const job of incomplete) {
+    const devData = _generateDevData();
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(devData)) {
+      fd.append(k, v);
+    }
+    try {
+      await fetch(`/api/review/${job.id}`, { method: 'POST', body: fd });
+      saved++;
+    } catch (e) {
+      console.error(`Failed to fill ${job.id}:`, e);
+    }
+  }
+  document.getElementById('upload-status').textContent = `Filled and saved ${saved}/${incomplete.length} invoice(s)`;
   refreshJobs();
 }
 
