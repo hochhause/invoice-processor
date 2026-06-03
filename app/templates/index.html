@@ -57,6 +57,12 @@
       <button class="btn btn-ai" id="btn-run-ai" onclick="runAiAll()" style="display:none" title="Re-process script-flagged invoices with AI">
         <span>🤖</span> Run AI on all flagged
       </button>
+      <button class="btn btn-secondary" id="btn-dev-fill" onclick="fillFormWithDevData()" title="[DEV ONLY] Fill form with random test data">
+        <span>⚙️</span> [DEV] Fill random
+      </button>
+      <button class="btn btn-secondary" onclick="clearAllInvoices()" title="Delete all invoices">
+        <span>🗑️</span> Clear all
+      </button>
     </div>
   </div>
 </section>
@@ -258,7 +264,7 @@ function isScript(method) {
 
 function statusBadge(job) {
   if (job.status === 'done' && job.needs_review === 'YES') {
-    return '<span class="badge badge-review">⚠ Review needed</span>';
+    return `<button class="badge badge-review" onclick="openModal('${job.id}')" style="cursor:pointer;border:none;background:inherit;padding:0;font:inherit;">⚠ Review needed</button>`;
   }
   const map = {
     pending:    '<span class="badge badge-pending">Waiting</span>',
@@ -400,6 +406,12 @@ async function deleteJob(id) {
   refreshJobs();
 }
 
+async function clearAllInvoices() {
+  if (!confirm('Delete ALL invoices? This cannot be undone.')) return;
+  await fetch('/api/clear-all', { method: 'DELETE' });
+  refreshJobs();
+}
+
 async function queueLlm(id) {
   await fetch(`/api/queue-llm/${id}`, { method: 'POST' });
   refreshJobs();
@@ -410,6 +422,26 @@ async function runAiAll() {
   const d = await r.json();
   document.getElementById('upload-status').textContent = `Queued ${d.queued} invoice(s) for AI processing.`;
   refreshJobs();
+}
+
+function fillFormWithDevData() {
+  if (!confirm('[DEV] Fill form with random test data?')) return;
+  const devData = {
+    invoice_id: `INV-${Math.random().toString(36).substr(2, 8).toUpperCase()}`,
+    receiver: ['Acme Corp', 'Global Tech Inc', 'Swift Finance Ltd', 'Digital Solutions AG'][Math.floor(Math.random() * 4)],
+    amount: (Math.random() * 9000 + 100).toFixed(2),
+    currency: ['CHF', 'EUR', 'USD', 'GBP'][Math.floor(Math.random() * 4)],
+    due_date: new Date(Date.now() + 30*86400*1000).toISOString().split('T')[0],
+    iban: 'CH' + Math.random().toString().substr(2, 19),
+    bic: 'SWIFT' + Math.random().toString(36).substr(2, 3).toUpperCase(),
+    bankgiro: Math.random().toString().substr(2, 11),
+    plusgiro: Math.random().toString().substr(2, 10),
+    reference: `REF-${Math.floor(Math.random() * 99999)}`
+  };
+  for (const field in devData) {
+    const input = document.getElementById(`f-${field.replace(/_/g, '-')}`);
+    if (input) input.value = devData[field];
+  }
 }
 
 // Initial load

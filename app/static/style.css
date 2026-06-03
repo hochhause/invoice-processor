@@ -208,7 +208,7 @@ body {
   background: white;
   border: 2px dashed #cbd5e1;
   border-radius: 12px;
-  padding: 48px 32px;
+  padding: 28px 24px;
   text-align: center;
   transition: all var(--transition-normal);
 }
@@ -233,9 +233,9 @@ body {
 }
 
 .upload-icon {
-  font-size: 48px;
+  font-size: 36px;
   display: block;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
   transition: transform var(--transition-normal);
 }
 
@@ -244,10 +244,10 @@ body {
 }
 
 .upload-title {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--lf-text-dark);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   letter-spacing: -0.3px;
 }
 
@@ -571,7 +571,7 @@ body {
 }
 
 .modal-form-pane {
-  flex: 0 0 420px;
+  flex: 0 0 380px;
   display: flex;
   flex-direction: column;
   background: white;

@@ -76,6 +76,15 @@ DEFAULT_PATTERNS = {
 }
 
 CURRENCY_PATTERN = r"\b(CHF|EUR|USD|GBP|SEK|NOK|DKK|CNY|RMB|JPY|AUD|CAD)\b"
+CURRENCY_SYMBOL_MAP = {
+    "$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
+    "¢": "USD",
+    "₹": "INR",
+    "₽": "RUB",
+}
 
 
 def _load_rule_set() -> dict:
@@ -110,6 +119,11 @@ def extract_fields(md: str, filename: str) -> dict:
     if m:
         currency = m.group(1).upper()
     else:
+        for symbol, code in CURRENCY_SYMBOL_MAP.items():
+            if symbol in md:
+                currency = code
+                break
+    if not currency:
         flags.append("currency_not_found")
 
     receiver = _first_match(patterns["receiver"], md)

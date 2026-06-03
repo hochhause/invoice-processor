@@ -112,6 +112,15 @@ async def delete_job(job_id: str):
     return JSONResponse({"ok": True})
 
 
+@app.delete("/api/clear-all")
+async def clear_all_jobs():
+    for f in UPLOAD_DIR.glob("*_*"):
+        f.unlink(missing_ok=True)
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM jobs")
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/pdf/{job_id}")
 async def serve_pdf(job_id: str):
     pdf = next(UPLOAD_DIR.glob(f"{job_id}_*"), None)
