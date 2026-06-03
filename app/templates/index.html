@@ -95,7 +95,6 @@
 
 <!-- Review / Edit modal -->
 <dialog id="review-modal" class="review-modal">
-  <div class="modal-overlay"></div>
   <div class="modal-inner">
     <div class="modal-pdf-pane">
       <iframe id="modal-pdf-frame" src="" title="Invoice PDF" class="modal-pdf"></iframe>
@@ -378,7 +377,7 @@ function closeModal() {
   document.getElementById('modal-pdf-frame').src = '';
 }
 
-modal.addEventListener('click', e => { if (e.target === modal || e.target.classList.contains('modal-overlay')) closeModal(); });
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
 async function submitReview(e) {
   e.preventDefault();
@@ -424,8 +423,13 @@ async function runAiAll() {
   refreshJobs();
 }
 
-function fillFormWithDevData() {
-  if (!confirm('[DEV] Fill form with random test data?')) return;
+async function fillFormWithDevData() {
+  if (!modal.open) {
+    alert('[DEV] Open an invoice modal first (click edit icon or review badge)');
+    return;
+  }
+  if (!confirm('[DEV] Fill form with random test data and save?')) return;
+
   const devData = {
     invoice_id: `INV-${Math.random().toString(36).substr(2, 8).toUpperCase()}`,
     receiver: ['Acme Corp', 'Global Tech Inc', 'Swift Finance Ltd', 'Digital Solutions AG'][Math.floor(Math.random() * 4)],
@@ -438,10 +442,20 @@ function fillFormWithDevData() {
     plusgiro: Math.random().toString().substr(2, 10),
     reference: `REF-${Math.floor(Math.random() * 99999)}`
   };
+
   for (const field in devData) {
     const input = document.getElementById(`f-${field.replace(/_/g, '-')}`);
     if (input) input.value = devData[field];
   }
+
+  const jobId = document.getElementById('modal-job-id').value;
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(devData)) {
+    fd.append(k, v);
+  }
+  await fetch(`/api/review/${jobId}`, { method: 'POST', body: fd });
+  closeModal();
+  refreshJobs();
 }
 
 // Initial load
