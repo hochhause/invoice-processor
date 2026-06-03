@@ -9,7 +9,8 @@ otherwise use defaults defined here.
 import os
 import re
 
-MANDATORY = ["invoice_id", "amount", "currency", "receiver"]
+MANDATORY_BASE = ["invoice_id", "amount", "currency", "receiver", "due_date"]
+MANDATORY_PROD = ["invoice_id", "amount", "currency", "receiver", "due_date", "reference"]
 
 
 def _first_match(patterns, text):
@@ -33,6 +34,48 @@ def _clean_iban(raw):
     raw = re.sub(r"\s", "", raw)
     m = re.match(r"([A-Z]{2}\d{2}[A-Z0-9]{11,30})", raw)
     return m.group(1) if m else raw
+
+
+def _extract_dates(text):
+    """Extract all dates found in text (YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY formats)."""
+    from datetime import datetime, timedelta
+    dates = []
+    patterns = [
+        r"(\d{4}-\d{2}-\d{2})",
+        r"(\d{1,2}[.\\/]\d{1,2}[.\\/]\d{4})",
+    ]
+    for p in patterns:
+        for m in re.finditer(p, text):
+            try:
+                date_str = m.group(1)
+                if "-" in date_str and len(date_str) == 10:
+                    dates.append(datetime.strptime(date_str, "%Y-%m-%d"))
+                elif "/" in date_str:
+                    parts = date_str.split("/")
+                    dates.append(datetime.strptime(f"{parts[2]}-{parts[1]}-{parts[0]}", "%Y-%m-%d"))
+                elif "." in date_str:
+                    parts = date_str.split(".")
+                    dates.append(datetime.strptime(f"{parts[2]}-{parts[1]}-{parts[0]}", "%Y-%m-%d"))
+            except (ValueError, IndexError):
+                pass
+    return dates
+
+
+def _generate_due_date(text, existing_due_date):
+    """If no due_date found and DEV_MODE enabled, generate one month after latest found date."""
+    if existing_due_date:
+        return existing_due_date
+    dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
+    if not dev_mode:
+        return ""
+    dates = _extract_dates(text)
+    if dates:
+        latest = max(dates)
+        from datetime import timedelta
+        due = latest + timedelta(days=30)
+        return due.strftime("%Y-%m-%d")
+    from datetime import datetime, timedelta
+    return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
 
 
 # ── Default patterns (override per bank via rules/<name>.py) ─────────────────
@@ -142,15 +185,29 @@ def extract_fields(md: str, filename: str) -> dict:
     bankgiro = _first_match(patterns["bankgiro"], md)
     plusgiro = _first_match(patterns["plusgiro"], md)
     due_date = _first_match(patterns["due_date"], md)
+    due_date = _generate_due_date(md, due_date)
 
     reference = _first_match(patterns["reference"], md)
     reference = re.sub(r"\s+", "", reference)
 
+    dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
+    mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
+
     check = {"invoice_id": invoice_id, "amount": amount,
-             "currency": currency, "receiver": receiver}
-    for field in MANDATORY:
+             "currency": currency, "receiver": receiver, "due_date": due_date,
+             "reference": reference}
+    for field in mandatory:
         if not check[field]:
             flags.append(f"{field}_not_found")
+
+    has_iban_bic = iban and bic
+    has_bankgiro = bankgiro
+    has_plusgiro = plusgiro
+    has_payment = has_iban_bic or has_bankgiro or has_plusgiro
+    if not has_payment:
+        flags.append("no_payment_method")
+    elif iban and not bic:
+        flags.append("iban_missing_bic")
 
     seen = set()
     deduped = [f for f in flags if not (f in seen or seen.add(f))]
