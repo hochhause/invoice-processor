@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./data:/app/data          # uploads + sqlite db
+      - ./rules:/app/rules        # bank CSV rule sets (hot-reload without rebuild)
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Ollama runs on the host — host.docker.internal resolves automatically on
+    # Docker Desktop; on rootless Podman add --network=host or set LLM_URL to
+    # the host IP directly.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

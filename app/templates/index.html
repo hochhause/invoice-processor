@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoice Processor – Lyfegen</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-content">
+    <div class="header-left">
+      <h1 class="app-title">Invoice Processor</h1>
+      <p class="app-subtitle">E-banking compatible extraction & review</p>
+    </div>
+    <div class="header-right">
+      <a class="btn btn-primary" href="/download/csv">
+        <span class="btn-icon">⬇</span> Download CSV
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="app-container">
+
+<!-- Upload zone -->
+<section class="upload-section">
+  <div class="upload-card">
+    <form id="upload-form" enctype="multipart/form-data" class="upload-form">
+      <input type="file" id="file-input" name="files" accept=".pdf" multiple hidden>
+      <label for="file-input" class="upload-target">
+        <div class="upload-icon">📄</div>
+        <h2 class="upload-title">Drop invoices here</h2>
+        <p class="upload-hint">or <span class="upload-link">click to browse</span></p>
+      </label>
+    </form>
+    <div id="upload-status" class="upload-feedback"></div>
+    <div id="upload-progress-wrap" class="upload-progress-wrap" style="display:none">
+      <div class="upload-progress-bar">
+        <div id="upload-progress-fill" class="upload-progress-fill"></div>
+      </div>
+      <div id="upload-progress-text" class="upload-progress-text"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Summary & Controls -->
+<section class="controls-section">
+  <div class="controls-bar">
+    <div id="summary" class="summary-badge"></div>
+    <div class="controls-actions">
+      <button class="btn btn-secondary" onclick="retryAll()" title="Retry failed invoices">
+        <span>↺</span> Retry errors
+      </button>
+      <button class="btn btn-ai" id="btn-run-ai" onclick="runAiAll()" style="display:none" title="Re-process script-flagged invoices with AI">
+        <span>🤖</span> Run AI on all flagged
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- Dashboard table -->
+<section class="table-section">
+  <div class="table-wrapper">
+    <table id="job-table" class="invoice-table">
+      <thead>
+        <tr>
+          <th class="th-file">File</th>
+          <th class="th-status">Status</th>
+          <th class="th-method">Processing</th>
+          <th class="th-invoice">Invoice ID</th>
+          <th class="th-receiver">Receiver</th>
+          <th class="th-amount">Amount</th>
+          <th class="th-currency">Curr.</th>
+          <th class="th-due">Due Date</th>
+          <th class="th-iban">IBAN</th>
+          <th class="th-notes">Notes</th>
+          <th class="th-actions"></th>
+        </tr>
+      </thead>
+      <tbody id="job-rows"></tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<!-- Review / Edit modal -->
+<dialog id="review-modal" class="review-modal">
+  <div class="modal-overlay"></div>
+  <div class="modal-inner">
+    <div class="modal-pdf-pane">
+      <iframe id="modal-pdf-frame" src="" title="Invoice PDF" class="modal-pdf"></iframe>
+    </div>
+    <div class="modal-form-pane">
+      <div class="modal-header">
+        <div>
+          <h2 id="modal-title" class="modal-title">Review invoice</h2>
+          <p id="modal-filename" class="modal-filename"></p>
+        </div>
+        <button class="btn-close" onclick="closeModal()" aria-label="Close">✕</button>
+      </div>
+      <div id="modal-reasons" class="modal-alert"></div>
+      <form id="review-form" class="modal-form" onsubmit="submitReview(event)">
+        <input type="hidden" id="modal-job-id" name="job_id">
+
+        <fieldset class="form-fieldset">
+          <legend class="form-legend">Invoice Details</legend>
+          <div class="form-row">
+            <div class="form-field">
+              <label>Invoice ID</label>
+              <input type="text" name="invoice_id" id="f-invoice-id" class="form-input">
+            </div>
+            <div class="form-field">
+              <label>Receiver / Supplier</label>
+              <input type="text" name="receiver" id="f-receiver" class="form-input">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-field">
+              <label>Amount</label>
+              <input type="text" name="amount" id="f-amount" placeholder="e.g. 1234.56" class="form-input">
+            </div>
+            <div class="form-field">
+              <label>Currency <span class="form-hint">(ISO 3-letter, e.g. CHF)</span></label>
+              <input type="text" name="currency" id="f-currency" maxlength="3" class="form-input">
+            </div>
+          </div>
+          <div class="form-field">
+            <label>Due Date</label>
+            <input type="text" name="due_date" id="f-due-date" placeholder="YYYY-MM-DD" class="form-input">
+          </div>
+        </fieldset>
+
+        <fieldset class="form-fieldset">
+          <legend class="form-legend">Payment Details</legend>
+          <div class="form-field">
+            <label>IBAN</label>
+            <input type="text" name="iban" id="f-iban" placeholder="CH…" class="form-input">
+          </div>
+          <div class="form-row">
+            <div class="form-field">
+              <label>BIC / SWIFT</label>
+              <input type="text" name="bic" id="f-bic" class="form-input">
+            </div>
+            <div class="form-field">
+              <label>Bankgiro</label>
+              <input type="text" name="bankgiro" id="f-bankgiro" class="form-input">
+            </div>
+            <div class="form-field">
+              <label>Plusgiro</label>
+              <input type="text" name="plusgiro" id="f-plusgiro" class="form-input">
+            </div>
+          </div>
+          <div class="form-field">
+            <label>Reference / Payment Ref</label>
+            <input type="text" name="reference" id="f-reference" class="form-input">
+          </div>
+        </fieldset>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save &amp; Mark Reviewed</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</dialog>
+
+<script>
+// ── Upload zone ────────────────────────────────────────────────────────────
+const dropZone = document.querySelector('.upload-target');
+const fileInput = document.getElementById('file-input');
+const uploadForm = document.getElementById('upload-form');
+let uploadingCount = 0;
+
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-active');
+});
+dropZone.addEventListener('dragleave', () => {
+  dropZone.classList.remove('drag-active');
+});
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-active');
+  uploadFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+
+async function uploadFiles(files) {
+  const pdfFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (pdfFiles.length === 0) return;
+
+  uploadingCount = pdfFiles.length;
+  showUploadProgress();
+
+  for (let i = 0; i < pdfFiles.length; i++) {
+    const file = pdfFiles[i];
+    const fd = new FormData();
+    fd.append('files', file);
+
+    try {
+      const r = await fetch('/upload', { method: 'POST', body: fd });
+      const data = await r.json();
+      updateUploadProgress(i + 1, pdfFiles.length, data.queued.length);
+    } catch (e) {
+      console.error('Upload failed:', e);
+      updateUploadProgress(i + 1, pdfFiles.length, 0);
+    }
+  }
+
+  fileInput.value = '';
+  hideUploadProgress();
+  refreshJobs();
+}
+
+function showUploadProgress() {
+  document.getElementById('upload-progress-wrap').style.display = 'block';
+  document.getElementById('upload-status').textContent = '';
+}
+
+function updateUploadProgress(current, total, queued) {
+  const pct = Math.round((current / total) * 100);
+  document.getElementById('upload-progress-fill').style.width = pct + '%';
+  document.getElementById('upload-progress-text').textContent = `${current} of ${total} uploaded`;
+}
+
+function hideUploadProgress() {
+  setTimeout(() => {
+    document.getElementById('upload-progress-wrap').style.display = 'none';
+  }, 800);
+}
+
+// ── Polling ────────────────────────────────────────────────────────────────
+let pollTimer = null;
+
+async function refreshJobs() {
+  const r = await fetch('/api/jobs');
+  const jobs = await r.json();
+  renderRows(jobs);
+  updateSummary(jobs);
+  const anyRunning = jobs.some(j => j.status === 'pending' || j.status === 'processing');
+  if (anyRunning) {
+    if (!pollTimer) pollTimer = setInterval(refreshJobs, 2000);
+  } else {
+    clearInterval(pollTimer); pollTimer = null;
+  }
+  const hasScriptReview = jobs.some(j => j.needs_review === 'YES' && isScript(j.ocr_method));
+  document.getElementById('btn-run-ai').style.display = hasScriptReview ? '' : 'none';
+}
+
+function isScript(method) {
+  return !method || method === 'mdx';
+}
+
+function statusBadge(job) {
+  if (job.status === 'done' && job.needs_review === 'YES') {
+    return '<span class="badge badge-review">⚠ Review needed</span>';
+  }
+  const map = {
+    pending:    '<span class="badge badge-pending">Waiting</span>',
+    processing: '<span class="badge badge-processing">⟳ Processing…</span>',
+    done:       '<span class="badge badge-done">✓ Complete</span>',
+    error:      '<span class="badge badge-error">✗ Error</span>',
+  };
+  return map[job.status] || `<span class="badge">${job.status}</span>`;
+}
+
+function methodBadge(job) {
+  if (job.status !== 'done' && job.status !== 'error') return '';
+  if (isScript(job.ocr_method)) return '<span class="badge badge-mdx">Script</span>';
+  return `<span class="badge badge-llm">AI</span>`;
+}
+
+function rowActions(job) {
+  let html = '';
+  if (job.status === 'done' || job.status === 'error') {
+    html += `<button class="btn-icon" title="Review &amp; edit" onclick="openModal('${job.id}')">✎</button> `;
+  }
+  if (job.needs_review === 'YES' && isScript(job.ocr_method) && job.status === 'done') {
+    html += `<button class="btn-icon btn-ai-icon" title="Re-process with AI" onclick="queueLlm('${job.id}')">🤖</button> `;
+  }
+  if (job.status === 'error') {
+    html += `<button class="btn-icon" title="Retry" onclick="retryJob('${job.id}')">↺</button> `;
+  }
+  html += `<button class="btn-icon btn-danger-icon" title="Delete" onclick="deleteJob('${job.id}')">✕</button>`;
+  return html;
+}
+
+function renderRows(jobs) {
+  const tbody = document.getElementById('job-rows');
+  tbody.innerHTML = jobs.map(job => {
+    const isReview = job.status === 'done' && job.needs_review === 'YES';
+    const rowClass = isReview ? 'row-review' : (job.status === 'error' ? 'row-error' : (job.status === 'processing' ? 'row-processing' : ''));
+    const notesCell = escHtml(job.review_reasons || (job.error_msg ? '⚠ ' + job.error_msg : ''));
+    return `<tr class="invoice-row ${rowClass}">
+      <td class="cell-file" title="${escHtml(job.filename)}">${escHtml(job.filename)}</td>
+      <td class="cell-status">${statusBadge(job)}</td>
+      <td class="cell-method">${methodBadge(job)}</td>
+      <td class="cell-invoice">${escHtml(job.invoice_id || '')}</td>
+      <td class="cell-receiver" title="${escHtml(job.receiver || '')}">${escHtml(job.receiver || '')}</td>
+      <td class="cell-amount">${escHtml(job.amount || '')}</td>
+      <td class="cell-currency">${escHtml(job.currency || '')}</td>
+      <td class="cell-due">${escHtml(job.due_date || '')}</td>
+      <td class="cell-iban">${escHtml(job.iban || '')}</td>
+      <td class="cell-notes">${notesCell}</td>
+      <td class="cell-actions">${rowActions(job)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function updateSummary(jobs) {
+  const done    = jobs.filter(j => j.status === 'done').length;
+  const review  = jobs.filter(j => j.needs_review === 'YES').length;
+  const err     = jobs.filter(j => j.status === 'error').length;
+  const proc    = jobs.filter(j => j.status === 'processing' || j.status === 'pending').length;
+  const total   = jobs.length;
+
+  const parts = [];
+  if (total > 0) parts.push(`<strong>${total}</strong> total`);
+  if (done > 0) parts.push(`<strong>${done}</strong> done`);
+  if (review > 0) parts.push(`<strong>${review}</strong> need review`);
+  if (err > 0) parts.push(`<strong>${err}</strong> errors`);
+  if (proc > 0) parts.push(`<strong>${proc}</strong> processing`);
+
+  document.getElementById('summary').innerHTML = parts.join(' • ') || 'No invoices yet';
+}
+
+// ── Modal ──────────────────────────────────────────────────────────────────
+const modal = document.getElementById('review-modal');
+const FIELDS = ['invoice_id','receiver','amount','currency','due_date','iban','bic','bankgiro','plusgiro','reference'];
+const FIELD_IDS = {
+  invoice_id: 'f-invoice-id', receiver: 'f-receiver', amount: 'f-amount',
+  currency: 'f-currency', due_date: 'f-due-date', iban: 'f-iban',
+  bic: 'f-bic', bankgiro: 'f-bankgiro', plusgiro: 'f-plusgiro', reference: 'f-reference'
+};
+
+async function openModal(jobId) {
+  const r = await fetch('/api/jobs');
+  const jobs = await r.json();
+  const job = jobs.find(j => j.id === jobId);
+  if (!job) return;
+
+  document.getElementById('modal-job-id').value = job.id;
+  document.getElementById('modal-pdf-frame').src = `/api/pdf/${job.id}`;
+  document.getElementById('modal-title').textContent =
+    job.needs_review === 'YES' ? 'Review Invoice' : 'Edit Invoice';
+  document.getElementById('modal-filename').textContent = job.filename;
+
+  if (job.review_reasons) {
+    document.getElementById('modal-reasons').textContent = job.review_reasons;
+    document.getElementById('modal-reasons').style.display = 'block';
+  } else {
+    document.getElementById('modal-reasons').style.display = 'none';
+  }
+
+  for (const f of FIELDS) {
+    document.getElementById(FIELD_IDS[f]).value = job[f] || '';
+  }
+  modal.showModal();
+}
+
+function closeModal() {
+  modal.close();
+  document.getElementById('modal-pdf-frame').src = '';
+}
+
+modal.addEventListener('click', e => { if (e.target === modal || e.target.classList.contains('modal-overlay')) closeModal(); });
+
+async function submitReview(e) {
+  e.preventDefault();
+  const jobId = document.getElementById('modal-job-id').value;
+  const fd = new FormData(e.target);
+  await fetch(`/api/review/${jobId}`, { method: 'POST', body: fd });
+  closeModal();
+  refreshJobs();
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+async function retryJob(id) {
+  await fetch(`/process/${id}`, { method: 'POST' });
+  refreshJobs();
+}
+
+async function retryAll() {
+  await fetch('/process-all', { method: 'POST' });
+  refreshJobs();
+}
+
+async function deleteJob(id) {
+  if (!confirm('Remove this invoice?')) return;
+  await fetch(`/jobs/${id}`, { method: 'DELETE' });
+  refreshJobs();
+}
+
+async function queueLlm(id) {
+  await fetch(`/api/queue-llm/${id}`, { method: 'POST' });
+  refreshJobs();
+}
+
+async function runAiAll() {
+  const r = await fetch('/api/queue-llm-all', { method: 'POST' });
+  const d = await r.json();
+  document.getElementById('upload-status').textContent = `Queued ${d.queued} invoice(s) for AI processing.`;
+  refreshJobs();
+}
+
+// Initial load
+refreshJobs();
+</script>
+</body>
+</html>
