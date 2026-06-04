@@ -17,6 +17,88 @@
   --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Dark mode overrides */
+[data-theme="dark"] {
+  --lf-text-dark: #E8E8E8;
+  --lf-text-muted: #B0B0B0;
+  --lf-gray-light: #333333;
+  --lf-gray-mid: #555555;
+  --lf-bg-off-white: #1F1F1F;
+  --lf-teal-dark: #0a4a42;
+}
+
+[data-theme="dark"] body {
+  background: linear-gradient(135deg, #0f1419 0%, #1a1f26 100%);
+  color: var(--lf-text-dark);
+}
+
+[data-theme="dark"] .upload-card {
+  background: #1a1a1a;
+  border-color: #333333;
+}
+
+[data-theme="dark"] .upload-card:hover {
+  background: rgba(34, 186, 160, 0.08);
+}
+
+[data-theme="dark"] .btn-secondary {
+  background: #2a2a2a;
+  color: var(--lf-text-dark);
+  border-color: #444444;
+}
+
+[data-theme="dark"] .btn-secondary:hover {
+  background: #333333;
+  border-color: #555555;
+}
+
+[data-theme="dark"] .btn-icon {
+  background: #2a2a2a;
+  border-color: #444444;
+  color: var(--lf-text-dark);
+}
+
+[data-theme="dark"] .btn-icon:hover {
+  background: rgba(34, 186, 160, 0.2);
+  border-color: var(--lf-teal-primary);
+}
+
+[data-theme="dark"] .review-modal {
+  background: #1a1a1a;
+  color: var(--lf-text-dark);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea {
+  background: #2a2a2a;
+  color: var(--lf-text-dark);
+  border-color: #444444;
+}
+
+[data-theme="dark"] input:focus,
+[data-theme="dark"] textarea:focus {
+  border-color: var(--lf-teal-primary);
+}
+
+[data-theme="dark"] .invoice-table {
+  background: #1a1a1a;
+  color: var(--lf-text-dark);
+}
+
+[data-theme="dark"] .invoice-table thead {
+  background: #222222;
+  color: var(--lf-text-dark);
+  border-color: #333333;
+}
+
+[data-theme="dark"] .invoice-table tbody tr {
+  border-color: #333333;
+}
+
+[data-theme="dark"] .invoice-table tbody tr:hover {
+  background: #252525;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -77,6 +159,24 @@ body {
 .header-right {
   display: flex;
   gap: 12px;
+  align-items: center;
+}
+
+.theme-toggle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.theme-toggle:hover {
+  border-color: var(--lf-teal-primary);
+  color: var(--lf-teal-primary);
 }
 
 /* ── Main container ────────────────────────────────────────────────────────── */

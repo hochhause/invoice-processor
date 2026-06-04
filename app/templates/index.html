@@ -16,6 +16,9 @@
       <p class="app-subtitle">E-banking compatible extraction & review</p>
     </div>
     <div class="header-right">
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">
+        <span id="theme-icon">🌙</span>
+      </button>
       <a class="btn btn-primary" href="/download/xml">
         <span class="btn-icon">⬇</span> Download pain.001 XML
       </a>
@@ -513,6 +516,24 @@ async function fillAllWithDevData() {
   document.getElementById('upload-status').textContent = `Filled and saved ${saved}/${incomplete.length} invoice(s)`;
   refreshJobs();
 }
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  const newTheme = isDark ? 'light' : 'dark';
+  html.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+  document.getElementById('theme-icon').textContent = isDark ? '🌙' : '☀️';
+}
+
+// Initialize theme from localStorage
+function initTheme() {
+  const saved = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('theme-icon').textContent = saved === 'dark' ? '☀️' : '🌙';
+}
+
+initTheme();
 
 // Initial load
 refreshJobs();

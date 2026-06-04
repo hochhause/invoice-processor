@@ -4,7 +4,7 @@ set -e
 
 if [ "$DEV_MODE" = "true" ] || [ "$DEV_MODE" = "1" ]; then
   echo "[start.sh] DEV_MODE enabled — running startup tests..."
-  python -m pytest tests.py -v --tb=short 2>&1
+  python -c "from tests import run_startup_tests; run_startup_tests()" 2>&1
   echo "[start.sh] Tests passed. Starting server..."
 fi
 

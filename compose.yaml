@@ -4,13 +4,15 @@ services:
     ports:
       - "8080:8000"
     volumes:
-      - ./data:/app/data          # uploads + sqlite db
-      - ./rules:/app/rules        # bank CSV rule sets (hot-reload without rebuild)
+      - invoice_processor_data:/app/data  # named volume (outside OneDrive sync)
+      - ./rules:/app/rules                # bank CSV rule sets (hot-reload without rebuild)
     env_file:
       - .env
     restart: unless-stopped
-    # Ollama runs on the host — host.docker.internal resolves automatically on
-    # Docker Desktop; on rootless Podman add --network=host or set LLM_URL to
-    # the host IP directly.
+    # Ollama on host: host.docker.internal works on Docker Desktop + Podman
+    # For rootless Podman, use --network=host or set LLM_URL to host IP
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  invoice_processor_data:
