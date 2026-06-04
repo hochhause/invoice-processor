@@ -116,6 +116,8 @@ async def api_jobs():
 async def delete_job(job_id: str):
     for f in UPLOAD_DIR.glob(f"{job_id}_*"):
         f.unlink(missing_ok=True)
+    # Also delete debug markdown files if DEBUG_MD_DIR set
+    pipeline._delete_debug_md(job_id, UPLOAD_DIR)
     with db.get_db() as conn:
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     return JSONResponse({"ok": True})
@@ -125,6 +127,12 @@ async def delete_job(job_id: str):
 async def clear_all_jobs():
     for f in UPLOAD_DIR.glob("*_*"):
         f.unlink(missing_ok=True)
+    # Also delete all debug markdown files if DEBUG_MD_DIR set
+    debug_md_dir = os.environ.get("DEBUG_MD_DIR", "")
+    if debug_md_dir:
+        debug_path = Path(debug_md_dir)
+        for f in debug_path.glob("*.md"):
+            f.unlink(missing_ok=True)
     with db.get_db() as conn:
         conn.execute("DELETE FROM jobs")
     return JSONResponse({"ok": True})

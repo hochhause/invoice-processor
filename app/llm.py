@@ -12,7 +12,9 @@ import urllib.request
 import urllib.error
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
-LLM_URL = os.environ.get("LLM_URL", "http://host.docker.internal:11434")
+# Default LLM_URL: use WSL vEthernet IP for container access (Windows Podman)
+# For Docker Desktop, use: http://host.docker.internal:11434
+LLM_URL = os.environ.get("LLM_URL", "http://172.29.208.1:11434")
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama3.2")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
