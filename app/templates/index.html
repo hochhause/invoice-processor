@@ -79,14 +79,13 @@
         <tr>
           <th class="th-file" onclick="sortTable(0)">File</th>
           <th class="th-status" onclick="sortTable(1)">Status</th>
-          <th class="th-method" onclick="sortTable(2)">Processing</th>
-          <th class="th-invoice" onclick="sortTable(3)">Invoice ID</th>
-          <th class="th-receiver" onclick="sortTable(4)">Receiver</th>
-          <th class="th-amount" onclick="sortTable(5)">Amount</th>
-          <th class="th-currency" onclick="sortTable(6)">Curr.</th>
-          <th class="th-due" onclick="sortTable(7)">Due Date</th>
-          <th class="th-iban" onclick="sortTable(8)">IBAN</th>
-          <th class="th-notes" onclick="sortTable(9)">Notes</th>
+          <th class="th-invoice" onclick="sortTable(2)">Invoice ID</th>
+          <th class="th-receiver" onclick="sortTable(3)">Receiver</th>
+          <th class="th-amount" onclick="sortTable(4)">Amount</th>
+          <th class="th-currency" onclick="sortTable(5)">Curr.</th>
+          <th class="th-due" onclick="sortTable(6)">Due Date</th>
+          <th class="th-iban" onclick="sortTable(7)">IBAN</th>
+          <th class="th-notes" onclick="sortTable(8)">Notes</th>
           <th class="th-actions"></th>
         </tr>
       </thead>
@@ -250,17 +249,32 @@ async function refreshJobs() {
   } else {
     clearInterval(pollTimer); pollTimer = null;
   }
-  const hasScriptReview = jobs.some(j => j.needs_review === 'YES' && isScript(j.ocr_method));
+  const hasScriptReview = jobs.some(j => jobHasErrors(j) && isScript(j.ocr_method) && j.status === 'done');
   document.getElementById('btn-run-ai').style.display = hasScriptReview ? '' : 'none';
 }
 
 function isScript(method) {
-  return !method || method === 'mdx';
+  return !method || method === 'mdx' || method === 'mdx+qr';
+}
+
+function jobHasErrors(job) {
+  if (!job.review_reasons) return false;
+  return job.review_reasons.split(/;\s*/).some(f => f && flagSeverity(f) === 'err');
+}
+
+function jobHasWarnings(job) {
+  if (!job.review_reasons) return false;
+  return job.review_reasons.split(/;\s*/).some(f => f && flagSeverity(f) === 'warn');
 }
 
 function statusBadge(job) {
-  if (job.status === 'done' && job.needs_review === 'YES') {
-    return `<button class="badge badge-review" onclick="openModal('${job.id}')" style="cursor:pointer;border:none;background:inherit;padding:0;font:inherit;">⚠ Review needed</button>`;
+  if (job.status === 'done') {
+    if (jobHasErrors(job)) {
+      return `<button class="badge badge-review" onclick="openModal('${job.id}')" style="cursor:pointer;border:none;background:inherit;padding:0;font:inherit;">✗ Errors</button>`;
+    }
+    if (jobHasWarnings(job)) {
+      return `<button class="badge badge-warn" onclick="openModal('${job.id}')" style="cursor:pointer;border:none;background:inherit;padding:0;font:inherit;">⚠ Warnings</button>`;
+    }
   }
   const map = {
     pending:    '<span class="badge badge-pending">Waiting</span>',
@@ -271,10 +285,61 @@ function statusBadge(job) {
   return map[job.status] || `<span class="badge">${job.status}</span>`;
 }
 
-function methodBadge(job) {
-  if (job.status !== 'done' && job.status !== 'error') return '';
-  if (isScript(job.ocr_method)) return '<span class="badge badge-mdx">Script</span>';
-  return `<span class="badge badge-llm">AI</span>`;
+const FLAG_ERR = new Set(['amount_not_found','receiver_not_found','due_date_not_found',
+  'currency_not_found','no_payment_method','qr_scan_failed','reference_not_found']);
+const FLAG_WARN = new Set(['invoice_id_not_found','iban_invalid_checksum',
+  'iban_invalid_checksum_dev_skipped','iban_missing_bic','qr_iban_missing',
+  'due_date_defaulted']);
+const FLAG_LABELS = {
+  amount_not_found: 'Amount missing',
+  receiver_not_found: 'Receiver missing',
+  due_date_not_found: 'Due date missing',
+  due_date_defaulted: 'Due date estimated (end of month)',
+  currency_not_found: 'Currency missing',
+  no_payment_method: 'No payment method',
+  qr_scan_failed: 'QR scan failed',
+  reference_not_found: 'Reference missing',
+  invoice_id_not_found: 'Invoice ID missing',
+  iban_invalid_checksum: 'IBAN checksum invalid',
+  iban_invalid_checksum_dev_skipped: 'IBAN suspicious',
+  iban_missing_bic: 'BIC missing',
+  qr_iban_missing: 'QR IBAN missing',
+};
+
+function flagSeverity(flag) {
+  if (FLAG_ERR.has(flag) || flag.startsWith('llm_fallback_failed')) return 'err';
+  if (FLAG_WARN.has(flag)) return 'warn';
+  return 'info';
+}
+
+function flagLabel(flag) {
+  if (FLAG_LABELS[flag]) return FLAG_LABELS[flag];
+  if (flag.startsWith('llm_fallback_failed')) return 'AI fallback failed';
+  return flag.replace(/_/g, ' ');
+}
+
+function methodLabel(method) {
+  if (!method || method === 'mdx') return 'Script';
+  if (method === 'mdx+qr') return 'Script+QR';
+  if (method.endsWith('+qr')) return 'AI+QR';
+  return 'AI';
+}
+
+function buildNotesCell(job) {
+  const pills = [];
+  if (job.ocr_method && (job.status === 'done' || job.status === 'error')) {
+    pills.push(`<span class="flag-pill flag-info">${escHtml(methodLabel(job.ocr_method))}</span>`);
+  }
+  if (job.review_reasons) {
+    for (const flag of job.review_reasons.split(/;\s*/)) {
+      if (!flag) continue;
+      pills.push(`<span class="flag-pill flag-${flagSeverity(flag)}">${escHtml(flagLabel(flag))}</span>`);
+    }
+  }
+  if (job.status === 'error' && job.error_msg && !job.review_reasons) {
+    pills.push(`<span class="flag-pill flag-err">⚠ ${escHtml(String(job.error_msg).slice(0, 50))}</span>`);
+  }
+  return pills.join('');
 }
 
 function rowActions(job) {
@@ -282,7 +347,7 @@ function rowActions(job) {
   if (job.status === 'done' || job.status === 'error') {
     html += `<button class="btn-icon" title="Review &amp; edit" onclick="openModal('${job.id}')">✎</button> `;
   }
-  if (job.needs_review === 'YES' && isScript(job.ocr_method) && job.status === 'done') {
+  if (jobHasErrors(job) && isScript(job.ocr_method) && job.status === 'done') {
     html += `<button class="btn-icon btn-ai-icon" title="Re-process with AI" onclick="queueLlm('${job.id}')">🤖</button> `;
   }
   if (job.status === 'error') {
@@ -297,18 +362,16 @@ function renderRows(jobs) {
   tbody.innerHTML = jobs.map(job => {
     const isReview = job.status === 'done' && job.needs_review === 'YES';
     const rowClass = isReview ? 'row-review' : (job.status === 'error' ? 'row-error' : (job.status === 'processing' ? 'row-processing' : ''));
-    const notesCell = escHtml(job.review_reasons || (job.error_msg ? '⚠ ' + job.error_msg : ''));
     return `<tr class="invoice-row ${rowClass}">
       <td class="cell-file" title="${escHtml(job.filename)}">${escHtml(job.filename)}</td>
       <td class="cell-status">${statusBadge(job)}</td>
-      <td class="cell-method">${methodBadge(job)}</td>
       <td class="cell-invoice">${escHtml(job.invoice_id || '')}</td>
       <td class="cell-receiver" title="${escHtml(job.receiver || '')}">${escHtml(job.receiver || '')}</td>
       <td class="cell-amount">${escHtml(job.amount || '')}</td>
       <td class="cell-currency">${escHtml(job.currency || '')}</td>
       <td class="cell-due">${escHtml(job.due_date || '')}</td>
       <td class="cell-iban">${escHtml(job.iban || '')}</td>
-      <td class="cell-notes">${notesCell}</td>
+      <td class="cell-notes">${buildNotesCell(job)}</td>
       <td class="cell-actions">${rowActions(job)}</td>
     </tr>`;
   }).join('');
@@ -356,11 +419,16 @@ async function openModal(jobId) {
     job.needs_review === 'YES' ? 'Review Invoice' : 'Edit Invoice';
   document.getElementById('modal-filename').textContent = job.filename;
 
+  const reasonsEl = document.getElementById('modal-reasons');
   if (job.review_reasons) {
-    document.getElementById('modal-reasons').textContent = job.review_reasons;
-    document.getElementById('modal-reasons').style.display = 'block';
+    const pills = job.review_reasons.split(/;\s*/).filter(Boolean).map(f => {
+      const sev = flagSeverity(f);
+      return `<span class="flag-pill flag-${sev}">${escHtml(flagLabel(f))}</span>`;
+    }).join(' ');
+    reasonsEl.innerHTML = pills;
+    reasonsEl.style.display = 'block';
   } else {
-    document.getElementById('modal-reasons').style.display = 'none';
+    reasonsEl.style.display = 'none';
   }
 
   for (const f of FIELDS) {

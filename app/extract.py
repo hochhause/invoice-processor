@@ -6,11 +6,26 @@ No LLM involved — pure pattern matching.
 Bank-specific rule sets: import from rules/<CSV_RULE_SET>.py if present,
 otherwise use defaults defined here.
 """
+import calendar
 import os
 import re
+from datetime import datetime
 
-MANDATORY_BASE = ["invoice_id", "amount", "currency", "receiver", "due_date"]
-MANDATORY_PROD = ["invoice_id", "amount", "currency", "receiver", "due_date", "reference"]
+# Fields whose absence blocks payment → needs_review=YES
+ERROR_FLAGS = frozenset({
+    "amount_not_found", "currency_not_found", "receiver_not_found",
+    "due_date_not_found", "no_payment_method", "reference_not_found",
+    "iban_invalid_checksum", "qr_scan_failed",
+})
+# Fields whose absence is worth noting but not blocking
+WARN_FLAGS = frozenset({
+    "invoice_id_not_found", "iban_invalid_checksum_dev_skipped",
+    "iban_missing_bic", "qr_iban_missing", "due_date_defaulted",
+})
+
+# invoice_id intentionally excluded — warning only, not blocking
+MANDATORY_BASE = ["amount", "currency", "receiver", "due_date"]
+MANDATORY_PROD = ["amount", "currency", "receiver", "due_date", "reference"]
 
 
 def _first_match(patterns, text):
@@ -73,21 +88,53 @@ def _extract_dates(text):
     return dates
 
 
-def _generate_due_date(text, existing_due_date):
-    """If no due_date found and DEV_MODE enabled, generate one month after latest found date."""
-    if existing_due_date:
-        return existing_due_date
-    dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
-    if not dev_mode:
+_DE_MONTHS = {
+    "januar": 1, "februar": 2, "märz": 3, "maerz": 3, "april": 4,
+    "mai": 5, "juni": 6, "juli": 7, "august": 8, "september": 9,
+    "oktober": 10, "november": 11, "dezember": 12,
+}
+
+
+def _parse_german_month_date(s: str) -> str:
+    """Parse '5. Oktober 2025' or '5.Oktober 2025' → '05.10.2025', or '' on failure."""
+    m = re.match(r"(\d{1,2})\.?\s*([A-Za-zä]+)\s+(\d{4})", s.strip())
+    if not m:
         return ""
-    dates = _extract_dates(text)
-    if dates:
-        latest = max(dates)
-        from datetime import timedelta
-        due = latest + timedelta(days=30)
-        return due.strftime("%Y-%m-%d")
-    from datetime import datetime, timedelta
-    return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    month = _DE_MONTHS.get(m.group(2).lower())
+    if not month:
+        return ""
+    try:
+        return datetime(int(m.group(3)), month, int(m.group(1))).strftime("%d.%m.%Y")
+    except ValueError:
+        return ""
+
+
+def _to_display_date(date_str: str) -> str:
+    """Normalize any date string to dd.mm.yyyy (incl. German month names)."""
+    if not date_str:
+        return date_str
+    german = _parse_german_month_date(date_str)
+    if german:
+        return german
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    return date_str
+
+
+def _end_of_current_month() -> str:
+    today = datetime.now()
+    last = calendar.monthrange(today.year, today.month)[1]
+    return datetime(today.year, today.month, last).strftime("%d.%m.%Y")
+
+
+def _generate_due_date(text, existing_due_date) -> tuple[str, bool]:
+    """Return (normalised_date, defaulted). defaulted=True when no date found."""
+    if existing_due_date:
+        return _to_display_date(existing_due_date), False
+    return _end_of_current_month(), True
 
 
 # ── Default patterns (override per bank via rules/<name>.py) ─────────────────
@@ -97,6 +144,8 @@ DEFAULT_PATTERNS = {
         r"INVOICE\s+NUMBER\s*\|\s*([\w\-]+)",
         r"Invoice\s+number[:\s#]*([A-Z0-9\-]+)",
         r"invoice\s*(?:no|#)[:\s#]*([A-Z0-9\-]+)",
+        r"Rechnungsnummer[:\s#]*([A-Z0-9\-\.]+)",
+        r"Rechnungs-?Nr\.?[:\s#]*([A-Z0-9\-\.]+)",
         r"No\.?\s*([A-Z0-9\-]+)",
         r"invoice.{0,5}no\.?\s+([A-Z0-9\-]+)",
     ],
@@ -122,8 +171,27 @@ DEFAULT_PATTERNS = {
     # "bankgiro": [r"Bankgiro[:\s]*([\d\-]+)"],
     # "plusgiro": [r"Plusgiro[:\s]*([\d\-]+)"],
     "due_date": [
-        r"DUE\s+DATE\s*\|\s*([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        # Table cell: | Zahlbar bis | 30.06.2026 |  (case-insensitive)
+        r"\|\s*[Zz]ahlbar\s+bis\s*:?\s*\|\s*([\d]{1,2}\.[\d]{1,2}\.[\d]{4})\s*\|",
+        # Table cell with German month name: | zahlbar bis: | 5. Oktober 2025 |
+        r"\|\s*[Zz]ahlbar\s+bis\s*:?\s*\|\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
+        # Inline with German month name: zahlbar bis: 5. Dezember 2025
+        r"[Zz]ahlbar\s+bis\s*:?\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
+        # Fälligkeitsdatum table: | Fälligkeitsdatum | 10/13/2024 |
+        r"\|\s*F[äa]lligkeitsdatum\s*\|\s*([\d]{1,2}[\/\.][\d]{1,2}[\/\.][\d]{4})",
+        # English
+        r"DUE\s+DATE\s*\|?\s*([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Due\s+Date[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"Payment\s+Due[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"Payable\s+by[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        # German / Swiss inline
+        r"[Zz]ahlbar\s+bis[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"F[äa]llig(?:keitsdatum)?[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"Zahlungsfrist[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"Valuta[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        # ISO date after label
+        r"Due\s+Date[:\s]+(\d{4}-\d{2}-\d{2})",
+        r"[Zz]ahlbar\s+bis[:\s]+(\d{4}-\d{2}-\d{2})",
     ],
     "reference": [
         r"OCR-?nr[:\s]*([0-9\s]+)",
@@ -195,16 +263,20 @@ def extract_fields(md: str, filename: str) -> dict:
 
     iban_raw = _first_match(patterns["iban"], md)
     iban = _clean_iban(iban_raw) if iban_raw else ""
+    dev_mode_iban = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     if iban and not _validate_iban_checksum(iban):
-        flags.append("iban_invalid_checksum")
-        iban = ""
+        if dev_mode_iban:
+            flags.append("iban_invalid_checksum_dev_skipped")
+        else:
+            flags.append("iban_invalid_checksum")
+            iban = ""
 
     bic = _first_match(patterns["bic"], md)
     # LEGACY: bankgiro/plusgiro removed — always empty for DB compatibility
     bankgiro = ""
     plusgiro = ""
-    due_date = _first_match(patterns["due_date"], md)
-    due_date = _generate_due_date(md, due_date)
+    due_date_raw = _first_match(patterns["due_date"], md)
+    due_date, due_date_defaulted = _generate_due_date(md, due_date_raw)
 
     reference = _first_match(patterns["reference"], md)
     reference = re.sub(r"\s+", "", reference)
@@ -212,12 +284,20 @@ def extract_fields(md: str, filename: str) -> dict:
     dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
 
-    check = {"invoice_id": invoice_id, "amount": amount,
-             "currency": currency, "receiver": receiver, "due_date": due_date,
-             "reference": reference}
+    check = {"amount": amount, "currency": currency,
+             "receiver": receiver, "due_date": due_date, "reference": reference}
     for field in mandatory:
         if not check[field]:
             flags.append(f"{field}_not_found")
+
+    # invoice_id: warn only, never blocks payment
+    if not invoice_id:
+        flags.append("invoice_id_not_found")
+
+    # due_date defaulted to end-of-month: warn, remove blocking error
+    if due_date_defaulted:
+        flags.append("due_date_defaulted")
+        flags = [f for f in flags if f != "due_date_not_found"]
 
     # Payment method check: IBAN + BIC required (bankgiro/plusgiro legacy, no longer supported)
     if not (iban and bic):
@@ -227,6 +307,8 @@ def extract_fields(md: str, filename: str) -> dict:
 
     seen = set()
     deduped = [f for f in flags if not (f in seen or seen.add(f))]
+
+    has_error = any(f in ERROR_FLAGS or f.startswith("llm_fallback_failed") for f in deduped)
 
     return {
         "invoice_id": invoice_id,
@@ -239,7 +321,8 @@ def extract_fields(md: str, filename: str) -> dict:
         "currency": currency,
         "due_date": due_date,
         "reference": reference,
-        "needs_review": "YES" if deduped else "NO",
+        "needs_review": "YES" if has_error else "NO",
         "review_reasons": "; ".join(deduped),
-        "ocr_method": "",   # filled by pipeline.py
+        "flags": deduped,          # structured list for pipeline merging
+        "ocr_method": "",          # filled by pipeline.py
     }
