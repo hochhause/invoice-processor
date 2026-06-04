@@ -1,0 +1,4 @@
+filename,invoice_id,receiver,iban,bic,bankgiro,plusgiro,amount,currency,due_date,reference,needs_review,review_reasons,ocr_method
+invoice_Theresa Swint_21236.pdf,INV-MOADQ8B3,Acme Corp,CH7200309561684487,SWIFT7O5,03890263416,3798820442,7614.17,GBP,2026-07-03,REF-95716,NO,,mdx
+invoice_Thomas Boland_10342.pdf,INV-0ZN36Z91,Global Tech Inc,CH8790691650750639,SWIFT1O0,15691577402,8620878754,2763.97,USD,2026-07-03,REF-16300,NO,,mdx
+invoice_Thomas Boland_23122.pdf,INV-B31MHNXH,Acme Corp,CH7899153173274239,SWIFTGW8,73227799801,6210551724,6250.55,GBP,2026-07-03,REF-27818,NO,,mdx

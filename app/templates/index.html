@@ -16,7 +16,10 @@
       <p class="app-subtitle">E-banking compatible extraction & review</p>
     </div>
     <div class="header-right">
-      <a class="btn btn-primary" href="/download/csv">
+      <a class="btn btn-primary" href="/download/xml">
+        <span class="btn-icon">⬇</span> Download pain.001 XML
+      </a>
+      <a class="btn btn-secondary" href="/download/csv">
         <span class="btn-icon">⬇</span> Download CSV
       </a>
     </div>
@@ -145,19 +148,9 @@
             <label>IBAN</label>
             <input type="text" name="iban" id="f-iban" placeholder="CH…" class="form-input">
           </div>
-          <div class="form-row">
-            <div class="form-field">
-              <label>BIC / SWIFT</label>
-              <input type="text" name="bic" id="f-bic" class="form-input">
-            </div>
-            <div class="form-field">
-              <label>Bankgiro</label>
-              <input type="text" name="bankgiro" id="f-bankgiro" class="form-input">
-            </div>
-            <div class="form-field">
-              <label>Plusgiro</label>
-              <input type="text" name="plusgiro" id="f-plusgiro" class="form-input">
-            </div>
+          <div class="form-field">
+            <label>BIC / SWIFT</label>
+            <input type="text" name="bic" id="f-bic" class="form-input">
           </div>
           <div class="form-field">
             <label>Reference / Payment Ref</label>
@@ -343,11 +336,11 @@ function updateSummary(jobs) {
 
 // ── Modal ──────────────────────────────────────────────────────────────────
 const modal = document.getElementById('review-modal');
-const FIELDS = ['invoice_id','receiver','amount','currency','due_date','iban','bic','bankgiro','plusgiro','reference'];
+const FIELDS = ['invoice_id','receiver','amount','currency','due_date','iban','bic','reference'];
 const FIELD_IDS = {
   invoice_id: 'f-invoice-id', receiver: 'f-receiver', amount: 'f-amount',
   currency: 'f-currency', due_date: 'f-due-date', iban: 'f-iban',
-  bic: 'f-bic', bankgiro: 'f-bankgiro', plusgiro: 'f-plusgiro', reference: 'f-reference'
+  bic: 'f-bic', reference: 'f-reference'
 };
 
 async function openModal(jobId) {
@@ -426,18 +419,45 @@ async function runAiAll() {
   refreshJobs();
 }
 
-function _generateDevData() {
+function _generateDevData(existingCurrency = null) {
+  // Use detected currency if present, else default CHF (70% CHF, 30% EUR)
+  const detectedCcy = existingCurrency || (Math.random() < 0.7 ? 'CHF' : 'EUR');
+
+  const isSepa = detectedCcy === 'EUR';
+  const isDomestic = detectedCcy === 'CHF';
+
+  // Valid-format IBAN per currency zone
+  let iban;
+  if (isDomestic) {
+    const bankCode = String(Math.floor(Math.random()*90000)+10000);
+    const acct = Array.from({length:12}, ()=>Math.floor(Math.random()*10)).join('');
+    iban = 'CH56' + bankCode + acct;  // 21-char valid CH IBAN
+  } else if (isSepa) {
+    iban = 'DE89' + Array.from({length:18}, ()=>Math.floor(Math.random()*10)).join('');
+  } else {
+    iban = 'GB29' + Array.from({length:18}, ()=>Math.floor(Math.random()*10)).join('');
+  }
+
+  // Real BIC prefixes by zone
+  const bicPrefixes = isDomestic
+    ? ['BLKB','KBSG','RAIF','UBSW','CRED']
+    : isSepa
+      ? ['DEUT','COBA','DKIB','INGA','HYVE']
+      : ['BARC','HSBC','LLOY','NATW','RBOS'];
+  const bicPrefix = bicPrefixes[Math.floor(Math.random()*bicPrefixes.length)];
+  const bicCountry = isDomestic ? 'CH' : (isSepa ? 'DE' : 'GB');
+  const bic = bicPrefix + bicCountry + '22';
+
+  // Minimum required fields only
   return {
-    invoice_id: `INV-${Math.random().toString(36).substr(2, 8).toUpperCase()}`,
-    receiver: ['Acme Corp', 'Global Tech Inc', 'Swift Finance Ltd', 'Digital Solutions AG'][Math.floor(Math.random() * 4)],
-    amount: (Math.random() * 9000 + 100).toFixed(2),
-    currency: ['CHF', 'EUR', 'USD', 'GBP'][Math.floor(Math.random() * 4)],
-    due_date: new Date(Date.now() + 30*86400*1000).toISOString().split('T')[0],
-    iban: 'CH' + Math.random().toString().substr(2, 19),
-    bic: 'SWIFT' + Math.random().toString(36).substr(2, 3).toUpperCase(),
-    bankgiro: Math.random().toString().substr(2, 11),
-    plusgiro: Math.random().toString().substr(2, 10),
-    reference: `REF-${Math.floor(Math.random() * 99999)}`
+    invoice_id: 'INV-' + Math.random().toString(36).substring(2,10).toUpperCase(),
+    receiver: ['Acme Corp','Global Tech Inc','Digital Solutions AG','Swift Finance Ltd'][Math.floor(Math.random()*4)],
+    amount: (Math.random()*9000+100).toFixed(2),
+    currency: detectedCcy,
+    due_date: new Date(Date.now()+30*864e5).toISOString().slice(0,10),
+    iban,
+    bic,
+    reference: 'RF' + String(Math.floor(Math.random()*90+10)) + Math.random().toString(36).substring(2,8).toUpperCase()
   };
 }
 
@@ -448,7 +468,8 @@ async function fillCurrentWithDevData() {
   }
   if (!confirm('[DEV] Auto-fill missing fields and save?')) return;
 
-  const devData = _generateDevData();
+  const existingCurrency = document.getElementById('f-currency').value || null;
+  const devData = _generateDevData(existingCurrency);
   for (const field in devData) {
     const input = document.getElementById(`f-${field.replace(/_/g, '-')}`);
     if (input) input.value = devData[field];
@@ -476,7 +497,8 @@ async function fillAllWithDevData() {
   document.getElementById('upload-status').textContent = `Filling ${incomplete.length} invoice(s)...`;
   let saved = 0;
   for (const job of incomplete) {
-    const devData = _generateDevData();
+    const existingCurrency = job.currency || null;
+    const devData = _generateDevData(existingCurrency);
     const fd = new FormData();
     for (const [k, v] of Object.entries(devData)) {
       fd.append(k, v);

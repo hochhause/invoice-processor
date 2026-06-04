@@ -18,12 +18,13 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
 import pipeline
+import xml_export
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -32,6 +33,14 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # Run startup tests in DEV_MODE
+    if os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes"):
+        try:
+            import tests
+            tests.run_startup_tests()
+        except Exception as e:
+            print(f"[STARTUP] Tests failed: {e}", flush=True)
+            raise
     yield
 
 
@@ -130,7 +139,7 @@ async def serve_pdf(job_id: str):
 
 
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency", "due_date",
-                 "iban", "bic", "bankgiro", "plusgiro", "reference"]
+                 "iban", "bic", "reference"]
 
 
 @app.post("/api/review/{job_id}")
@@ -172,8 +181,7 @@ async def queue_llm_all(background_tasks: BackgroundTasks):
 async def download_csv():
     jobs = [j for j in db.get_all_jobs() if j["status"] == "done"]
     fields = ["filename", "invoice_id", "receiver", "iban", "bic",
-              "bankgiro", "plusgiro", "amount", "currency", "due_date",
-              "reference", "needs_review", "review_reasons", "ocr_method"]
+              "amount", "currency", "due_date", "reference", "needs_review", "review_reasons", "ocr_method"]
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     w.writeheader()
@@ -184,4 +192,21 @@ async def download_csv():
         iter([buf.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=invoices.csv"},
+    )
+
+
+@app.get("/download/xml")
+async def download_xml():
+    """Download ISO 20022 pain.001.001.03 XML for mass payment import."""
+    jobs = db.get_all_jobs()
+    debtor = {
+        "name": os.getenv("DEBTOR_NAME", "My Company"),
+        "iban": os.getenv("DEBTOR_IBAN", ""),
+        "bic": os.getenv("DEBTOR_BIC", ""),
+    }
+    xml_str = xml_export.build_pain001(jobs, debtor)
+    return Response(
+        content=xml_str,
+        media_type="application/xml",
+        headers={"Content-Disposition": "attachment; filename=pain001.xml"},
     )

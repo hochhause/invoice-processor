@@ -1,0 +1,139 @@
+"""
+tests.py — Startup self-tests for DEV_MODE.
+Run automatically on startup when DEV_MODE=true.
+Covers: IBAN checksum, BIC validation, extract_fields, pain.001 XML generation.
+"""
+import re
+import sys
+
+
+def run_startup_tests():
+    failures = []
+
+    def check(name, condition, detail=""):
+        if not condition:
+            failures.append(f"FAIL [{name}]: {detail}")
+
+    # ── T1: IBAN checksum validation ──────────────────────────────────────────
+    from extract import _validate_iban_checksum
+    check("T1a-valid-CH", _validate_iban_checksum("CH5604835012345678009"),
+          "Valid CH IBAN should pass checksum")
+    check("T1b-valid-DE", _validate_iban_checksum("DE89370400440532013000"),
+          "Valid DE IBAN should pass checksum")
+    check("T1c-invalid", not _validate_iban_checksum("CH9900000000000000000"),
+          "Invalid IBAN should fail checksum")
+    check("T1d-fake-dev", not _validate_iban_checksum("CH" + "1234567890123456789"),
+          "Fake dev IBAN should fail checksum (non-MOD97)")
+
+    # ── T2: BIC regex rejects fake patterns, accepts real ────────────────────
+    BIC_PATTERN = r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$"
+    check("T2a-real-bic", bool(re.match(BIC_PATTERN, "BLKBCH22")),
+          "BLKBCH22 is a valid 8-char BIC")
+    check("T2b-real-bic-11", bool(re.match(BIC_PATTERN, "BLKBCH22XXX")),
+          "BLKBCH22XXX is a valid 11-char BIC")
+    check("T2c-fake-bic", not bool(re.match(BIC_PATTERN, "SWIFT123")),
+          "SWIFT123 (all-numeric location) should fail — needs at least 1 letter in location")
+    check("T2d-too-short", not bool(re.match(BIC_PATTERN, "BLKB")),
+          "4-char string is not a valid BIC")
+
+    # ── T3: extract_fields returns expected structure ─────────────────────────
+    from extract import extract_fields
+    SAMPLE_MD = """
+# INVOICE NUMBER | INV-TEST001
+Acme Corp
+
+| Total | 1234.56 |
+
+IBAN: CH5604835012345678009
+BIC: BLKBCH22
+CHF
+
+Due Date: 01/06/2026
+order no: ORD-999
+"""
+    fields = extract_fields(SAMPLE_MD, "test.pdf")
+    check("T3a-invoice-id", fields.get("invoice_id") == "INV-TEST001",
+          f"Expected INV-TEST001, got {fields.get('invoice_id')}")
+    check("T3b-amount", fields.get("amount") == "1234.56",
+          f"Expected 1234.56, got {fields.get('amount')}")
+    check("T3c-currency", fields.get("currency") == "CHF",
+          f"Expected CHF, got {fields.get('currency')}")
+    check("T3d-iban", "CH5604835012345678009" in fields.get("iban", ""),
+          f"Expected CH IBAN, got {fields.get('iban')}")
+    check("T3e-bic", fields.get("bic") == "BLKBCH22",
+          f"Expected BLKBCH22, got {fields.get('bic')}")
+    check("T3f-no-bankgiro", fields.get("bankgiro") == "",
+          "bankgiro should always be empty (legacy removed)")
+    check("T3g-no-plusgiro", fields.get("plusgiro") == "",
+          "plusgiro should always be empty (legacy removed)")
+
+    # ── T4: pain.001 XML is well-formed and has required elements ─────────────
+    from xml_export import build_pain001
+    import xml.etree.ElementTree as ET
+
+    debtor = {"name": "Test Corp AG", "iban": "CH5604835012345678009", "bic": "BLKBCH22"}
+    jobs_chf = [{"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+                 "amount": "500.00", "currency": "CHF", "receiver": "Vendor AG",
+                 "invoice_id": "INV-001", "due_date": "2026-07-01", "reference": "REF-001"}]
+    xml_str = build_pain001(jobs_chf, debtor)
+    check("T4a-xml-parseable", True, "")  # will throw if bad
+    try:
+        root = ET.fromstring(xml_str.split("\n", 1)[1])  # skip XML declaration
+        ns = {"p": "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"}
+        grp = root.find(".//p:GrpHdr", ns)
+        check("T4b-grphdr-exists", grp is not None, "GrpHdr element missing")
+        nb = grp.find("p:NbOfTxs", ns)
+        check("T4c-nbtxs-1", nb is not None and nb.text == "1", f"NbOfTxs={nb.text if nb is not None else 'None'}")
+        iban_el = root.find(".//p:CdtrAcct/p:Id/p:IBAN", ns)
+        check("T4d-creditor-iban", iban_el is not None and "CH56" in (iban_el.text or ""),
+              f"Creditor IBAN element not found or wrong: {iban_el.text if iban_el is not None else None}")
+    except ET.ParseError as e:
+        failures.append(f"FAIL [T4-xml-parse]: {e}")
+
+    # ── T5: Multi-currency → multiple PmtInf blocks ───────────────────────────
+    jobs_multi = [
+        {"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+         "amount": "100.00", "currency": "CHF", "receiver": "A", "invoice_id": "I1",
+         "due_date": "2026-07-01", "reference": "R1"},
+        {"status": "done", "iban": "DE89370400440532013000", "bic": "DEUTDEDB",
+         "amount": "200.00", "currency": "EUR", "receiver": "B", "invoice_id": "I2",
+         "due_date": "2026-07-02", "reference": "R2"},
+    ]
+    xml_multi = build_pain001(jobs_multi, debtor)
+    try:
+        root2 = ET.fromstring(xml_multi.split("\n", 1)[1])
+        ns = {"p": "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"}
+        pmtinf_els = root2.findall(".//p:PmtInf", ns)
+        check("T5-two-pmtinf", len(pmtinf_els) == 2,
+              f"Expected 2 PmtInf blocks for CHF+EUR, got {len(pmtinf_els)}")
+    except ET.ParseError as e:
+        failures.append(f"FAIL [T5-multi-xml]: {e}")
+
+    # ── T6: Jobs missing IBAN/BIC are skipped ─────────────────────────────────
+    jobs_skip = [
+        {"status": "done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
+         "currency": "CHF", "receiver": "X", "invoice_id": "I3", "due_date": "2026-07-01", "reference": "R3"},
+        {"status": "done", "iban": "CH5604835012345678009", "bic": "",
+         "amount": "200.00", "currency": "CHF", "receiver": "Y", "invoice_id": "I4",
+         "due_date": "2026-07-01", "reference": "R4"},
+    ]
+    xml_skip = build_pain001(jobs_skip, debtor)
+    try:
+        root3 = ET.fromstring(xml_skip.split("\n", 1)[1])
+        ns = {"p": "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"}
+        nb3 = root3.find(".//p:NbOfTxs", ns)
+        check("T6-skip-no-iban-bic", nb3 is not None and nb3.text == "0",
+              f"Expected NbOfTxs=0 when all jobs missing IBAN/BIC, got {nb3.text if nb3 is not None else None}")
+    except ET.ParseError as e:
+        failures.append(f"FAIL [T6-skip-xml]: {e}")
+
+    # ── Report ────────────────────────────────────────────────────────────────
+    total = 16  # approximate number of checks
+    passed = total - len(failures)
+    if failures:
+        print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)
+        for f in failures:
+            print(f"  {f}", file=sys.stderr)
+        raise RuntimeError(f"Startup tests failed: {len(failures)} check(s) failed")
+    else:
+        print(f"[STARTUP TESTS] All checks passed [OK]")

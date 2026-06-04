@@ -36,6 +36,18 @@ def _clean_iban(raw):
     return m.group(1) if m else raw
 
 
+def _validate_iban_checksum(iban: str) -> bool:
+    """MOD-97 IBAN checksum validation (ISO 13616). No external deps."""
+    if len(iban) < 5:
+        return False
+    rearranged = iban[4:] + iban[:4]
+    numeric = re.sub(r"[A-Z]", lambda m: str(ord(m.group()) - 55), rearranged)
+    try:
+        return int(numeric) % 97 == 1
+    except ValueError:
+        return False
+
+
 def _extract_dates(text):
     """Extract all dates found in text (YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY formats)."""
     from datetime import datetime, timedelta
@@ -97,15 +109,15 @@ DEFAULT_PATTERNS = {
         r"BILL\s+FROM\s*\|\s*BILL\s+TO[^\n]*\n\|[-\s\|]+\n\|\s*([^\|]+?)\s*\|",
     ],
     "iban": [
-        r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,30})",
+        r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{11,30})",
         r"\b([A-Z]{2}\d{2}[A-Z0-9]{4}\d{7,})\b",
     ],
     "bic": [
-        r"Swift\s*Code[:\s]+([A-Z]{6}[A-Z0-9]{2,5})",
-        r"BIC[:\s]+([A-Z]{6}[A-Z0-9]{2,5})",
+        r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
     ],
-    "bankgiro": [r"Bankgiro[:\s]*([\d\-]+)"],
-    "plusgiro": [r"Plusgiro[:\s]*([\d\-]+)"],
+    # LEGACY: Bankgiro/Plusgiro are Swedish-only payment methods, no longer extracted.
+    # "bankgiro": [r"Bankgiro[:\s]*([\d\-]+)"],
+    # "plusgiro": [r"Plusgiro[:\s]*([\d\-]+)"],
     "due_date": [
         r"DUE\s+DATE\s*\|\s*([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Due\s+Date[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
@@ -180,10 +192,14 @@ def extract_fields(md: str, filename: str) -> dict:
 
     iban_raw = _first_match(patterns["iban"], md)
     iban = _clean_iban(iban_raw) if iban_raw else ""
+    if iban and not _validate_iban_checksum(iban):
+        flags.append("iban_invalid_checksum")
+        iban = ""
 
     bic = _first_match(patterns["bic"], md)
-    bankgiro = _first_match(patterns["bankgiro"], md)
-    plusgiro = _first_match(patterns["plusgiro"], md)
+    # LEGACY: bankgiro/plusgiro removed — always empty for DB compatibility
+    bankgiro = ""
+    plusgiro = ""
     due_date = _first_match(patterns["due_date"], md)
     due_date = _generate_due_date(md, due_date)
 
@@ -200,11 +216,8 @@ def extract_fields(md: str, filename: str) -> dict:
         if not check[field]:
             flags.append(f"{field}_not_found")
 
-    has_iban_bic = iban and bic
-    has_bankgiro = bankgiro
-    has_plusgiro = plusgiro
-    has_payment = has_iban_bic or has_bankgiro or has_plusgiro
-    if not has_payment:
+    # Payment method check: IBAN + BIC required (bankgiro/plusgiro legacy, no longer supported)
+    if not (iban and bic):
         flags.append("no_payment_method")
     elif iban and not bic:
         flags.append("iban_missing_bic")
