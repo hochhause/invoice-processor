@@ -57,10 +57,10 @@ templates = Jinja2Templates(directory="templates")
 
 # ── Background tasks ──────────────────────────────────────────────────────────
 
-def _process_job(job_id: str, pdf_path: str, force_llm: bool = False):
+def _process_job(job_id: str, pdf_path: str):
     db.upsert_job(job_id, status="processing")
     try:
-        fields = pipeline.run(pdf_path, force_llm=force_llm)
+        fields = pipeline.run(pdf_path)
         fields.pop("flags", None)  # in-memory only, not a DB column
         db.upsert_job(job_id, status="done", **fields)
     except Exception as e:
@@ -169,29 +169,6 @@ async def save_review(job_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/queue-llm/{job_id}")
-async def queue_llm_one(job_id: str, background_tasks: BackgroundTasks):
-    job = db.get_job(job_id)
-    if not job:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    pdf = next(UPLOAD_DIR.glob(f"{job_id}_*"), None)
-    if not pdf:
-        return JSONResponse({"error": "file missing"}, status_code=404)
-    db.upsert_job(job_id, status="pending")
-    background_tasks.add_task(_process_job, job_id, str(pdf), True)
-    return JSONResponse({"ok": True})
-
-
-@app.post("/api/queue-llm-all")
-async def queue_llm_all(background_tasks: BackgroundTasks):
-    jobs = [j for j in db.get_all_jobs()
-            if j.get("needs_review") == "YES" and j.get("ocr_method") in ("mdx", "", None)]
-    for job in jobs:
-        pdf = next(UPLOAD_DIR.glob(f"{job['id']}_*"), None)
-        if pdf:
-            db.upsert_job(job["id"], status="pending")
-            background_tasks.add_task(_process_job, job["id"], str(pdf), True)
-    return JSONResponse({"queued": len(jobs)})
 
 
 @app.get("/download/csv")

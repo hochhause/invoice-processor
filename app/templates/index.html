@@ -58,9 +58,6 @@
       <button class="btn btn-secondary" onclick="retryAll()" title="Retry failed invoices">
         <span>↺</span> Retry errors
       </button>
-      <button class="btn btn-ai" id="btn-run-ai" onclick="runAiAll()" style="display:none" title="Re-process script-flagged invoices with AI">
-        <span>🤖</span> Run AI on all flagged
-      </button>
       <button class="btn btn-secondary" id="btn-dev-fill" onclick="fillAllWithDevData()" title="[DEV] Auto-fill all incomplete invoices">
         <span>⚙️</span> [DEV] Fill all
       </button>
@@ -502,17 +499,6 @@ async function clearAllInvoices() {
   refreshJobs();
 }
 
-async function queueLlm(id) {
-  await _apiFetch(`/api/queue-llm/${id}`, { method: 'POST' });
-  refreshJobs();
-}
-
-async function runAiAll() {
-  const r = await _apiFetch('/api/queue-llm-all', { method: 'POST' });
-  const d = await r.json();
-  document.getElementById('upload-status').textContent = `Queued ${d.queued} invoice(s) for AI processing.`;
-  refreshJobs();
-}
 
 function _generateDevData(existingCurrency = null) {
   // Use detected currency if present, else default CHF (70% CHF, 30% EUR)
