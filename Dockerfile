@@ -1,9 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.11-bookworm
 
-# poppler-utils needed for PDF operations; libzbar0 needed for QR decoding
+# poppler-utils, libzbar0 for PDF/QR; mesa libs for Docling OCR in headless env
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libzbar0 \
+    libgl1-mesa-glx \
+    libxext6 \
+    libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

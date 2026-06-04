@@ -212,6 +212,28 @@ async def api_llm_available():
     return {"available": llm_available()}
 
 
+@app.get("/api/whitelist")
+async def get_whitelist(type: str = None):
+    """Get whitelisted receivers/IBANs."""
+    return db.get_whitelist(type)
+
+
+@app.post("/api/whitelist/{type}/{value}")
+async def add_whitelist(type: str, value: str):
+    """Add item to whitelist."""
+    if type not in ("receiver", "iban"):
+        return JSONResponse({"error": "invalid type"}, status_code=400)
+    db.add_to_whitelist(type, value)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/whitelist")
+async def clear_whitelist(type: str = None):
+    """Clear whitelist (all or by type). DEV ONLY."""
+    db.clear_whitelist(type)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/retry-ai/{job_id}")
 async def retry_with_ai(job_id: str):
     """Reprocess missing fields with Tier 1 (Haiku) markdown extraction."""
@@ -231,7 +253,8 @@ async def retry_with_ai(job_id: str):
             {"error": "Markdown not available (DEBUG_MD_DIR not set)"}, status_code=400
         )
 
-    md_path = Path(debug_md_dir) / f"{job['filename']}.md"
+    filename_stem = Path(job['filename']).stem
+    md_path = Path(debug_md_dir) / f"{job_id}_{filename_stem}.md"
     if not md_path.exists():
         return JSONResponse(
             {"error": "Markdown file not found"}, status_code=400

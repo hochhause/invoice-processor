@@ -58,13 +58,27 @@
       <button class="btn btn-secondary" onclick="retryAll()" title="Retry failed invoices">
         <span>↺</span> Retry errors
       </button>
-      <button class="btn btn-secondary" id="btn-dev-fill" onclick="fillAllWithDevData()" title="[DEV] Auto-fill all incomplete invoices">
-        <span>⚙️</span> [DEV] Fill all
-      </button>
       <button class="btn btn-secondary" onclick="clearAllInvoices()" title="Delete all invoices">
         <span>🗑️</span> Clear all
       </button>
+      <button class="btn btn-secondary" onclick="toggleDevPanel()" title="Dev tools">
+        <span>⚙️</span> Dev
+      </button>
     </div>
+  </div>
+
+  <div id="dev-panel" class="dev-panel" style="display:none; margin-top:16px; padding:12px; background:#1a1a1a; border-radius:4px;">
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <div>
+        <strong>LLM Status:</strong> <span id="llm-status">Checking...</span>
+      </div>
+      <div>
+        <strong>Whitelist:</strong> <span id="whitelist-count">-</span> items
+      </div>
+    </div>
+    <button class="btn btn-secondary" onclick="flushWhitelist()" title="Clear whitelist">
+      <span>🗑️</span> Flush whitelist
+    </button>
   </div>
 </section>
 
@@ -157,9 +171,6 @@
 
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-          <button type="button" class="btn btn-secondary" id="btn-modal-dev-fill" onclick="fillCurrentWithDevData()" title="[DEV] Auto-fill missing fields">
-            <span>⚙️</span> [DEV] Fill
-          </button>
           <button type="button" class="btn btn-ai" id="btn-retry-ai" onclick="retryWithAI()" style="display:none" title="Extract missing fields with AI">
             <span>🤖</span> Retry with AI
           </button>
@@ -249,12 +260,6 @@ async function refreshJobs() {
   } else {
     clearInterval(pollTimer); pollTimer = null;
   }
-  const hasScriptReview = jobs.some(j => jobHasErrors(j) && isScript(j.ocr_method) && j.status === 'done');
-  document.getElementById('btn-run-ai').style.display = hasScriptReview ? '' : 'none';
-}
-
-function isScript(method) {
-  return !method || method === 'mdx' || method === 'mdx+qr';
 }
 
 function jobHasErrors(job) {
@@ -286,7 +291,8 @@ function statusBadge(job) {
 }
 
 const FLAG_ERR = new Set(['amount_not_found','receiver_not_found','due_date_not_found',
-  'currency_not_found','no_payment_method','qr_scan_failed','reference_not_found']);
+  'currency_not_found','no_payment_method','qr_scan_failed','reference_not_found',
+  'invoice_id_suspicious','receiver_suspicious','iban_suspicious']);
 const FLAG_WARN = new Set(['invoice_id_not_found','iban_invalid_checksum',
   'iban_invalid_checksum_dev_skipped','iban_missing_bic','qr_iban_missing',
   'due_date_defaulted']);
@@ -300,6 +306,9 @@ const FLAG_LABELS = {
   qr_scan_failed: 'QR scan failed',
   reference_not_found: 'Reference missing',
   invoice_id_not_found: 'Invoice ID missing',
+  invoice_id_suspicious: 'Invoice ID suspicious',
+  receiver_suspicious: 'Receiver unknown',
+  iban_suspicious: 'IBAN unknown',
   iban_invalid_checksum: 'IBAN checksum invalid',
   iban_invalid_checksum_dev_skipped: 'IBAN suspicious',
   iban_missing_bic: 'BIC missing',
@@ -321,7 +330,10 @@ function flagLabel(flag) {
 function methodLabel(method) {
   if (!method || method === 'mdx') return 'Script';
   if (method === 'mdx+qr') return 'Script+QR';
+  if (method === 'docling' || method === 'docling') return 'Script';
+  if (method === 'docling+qr') return 'Script+QR';
   if (method.endsWith('+qr')) return 'AI+QR';
+  if (method.startsWith('docling')) return 'Script';
   return 'AI';
 }
 
@@ -346,9 +358,6 @@ function rowActions(job) {
   let html = '';
   if (job.status === 'done' || job.status === 'error') {
     html += `<button class="btn-icon" title="Review &amp; edit" onclick="openModal('${job.id}')">✎</button> `;
-  }
-  if (jobHasErrors(job) && isScript(job.ocr_method) && job.status === 'done') {
-    html += `<button class="btn-icon btn-ai-icon" title="Re-process with AI" onclick="queueLlm('${job.id}')">🤖</button> `;
   }
   if (job.status === 'error') {
     html += `<button class="btn-icon" title="Retry" onclick="retryJob('${job.id}')">↺</button> `;
@@ -499,8 +508,7 @@ async function clearAllInvoices() {
   refreshJobs();
 }
 
-
-function _generateDevData(existingCurrency = null) {
+function filterTable() {
   // Use detected currency if present, else default CHF (70% CHF, 30% EUR)
   const detectedCcy = existingCurrency || (Math.random() < 0.7 ? 'CHF' : 'EUR');
 
@@ -693,6 +701,63 @@ async function retryWithAI() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalText;
+  }
+}
+
+// ── Dev Panel ──────────────────────────────────────────────────────────────
+function toggleDevPanel() {
+  const panel = document.getElementById('dev-panel');
+  if (panel) {
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    if (panel.style.display === 'block') {
+      updateDevPanel();
+    }
+  }
+}
+
+async function updateDevPanel() {
+  // Check LLM status
+  try {
+    const res = await fetch('/api/llm-available');
+    const {available} = await res.json();
+    const statusEl = document.getElementById('llm-status');
+    if (statusEl) {
+      statusEl.textContent = available ? '✓ Ready' : '✗ Not configured';
+      statusEl.style.color = available ? '#0a0' : '#a00';
+    }
+  } catch (e) {
+    const statusEl = document.getElementById('llm-status');
+    if (statusEl) {
+      statusEl.textContent = '✗ Error: ' + e.message;
+      statusEl.style.color = '#a00';
+    }
+  }
+
+  // Check whitelist count
+  try {
+    const res = await fetch('/api/whitelist');
+    const items = await res.json();
+    const countEl = document.getElementById('whitelist-count');
+    if (countEl) {
+      countEl.textContent = items.length;
+    }
+  } catch (e) {
+    const countEl = document.getElementById('whitelist-count');
+    if (countEl) {
+      countEl.textContent = '? (error)';
+    }
+  }
+}
+
+async function flushWhitelist() {
+  if (!confirm('Clear all whitelisted receivers and IBANs?')) return;
+
+  try {
+    await fetch('/api/whitelist', { method: 'DELETE' });
+    alert('✓ Whitelist cleared');
+    updateDevPanel();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
   }
 }
 

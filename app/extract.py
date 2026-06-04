@@ -11,11 +11,12 @@ import os
 import re
 from datetime import datetime
 
-# Fields whose absence blocks payment → needs_review=YES
+# Fields whose absence/issues block payment → needs_review=YES
 ERROR_FLAGS = frozenset({
     "amount_not_found", "currency_not_found", "receiver_not_found",
     "due_date_not_found", "no_payment_method", "reference_not_found",
     "iban_invalid_checksum", "qr_scan_failed",
+    "invoice_id_suspicious", "receiver_suspicious", "iban_suspicious",
 })
 # Fields whose absence is worth noting but not blocking
 WARN_FLAGS = frozenset({
@@ -234,11 +235,20 @@ def _load_rule_set() -> dict:
     return patterns
 
 
-def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
+def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitelist: bool = True) -> dict:
     if skip_fields is None:
         skip_fields = set()
     patterns = _load_rule_set()
     flags = []
+
+    # Import whitelist check (lazy import to avoid circular dep)
+    is_whitelisted = None
+    if check_whitelist:
+        try:
+            from db import is_whitelisted as check_wl
+            is_whitelisted = check_wl
+        except ImportError:
+            pass
 
     invoice_id = _first_match(patterns["invoice_id"], md) if "invoice_id" not in skip_fields else ""
 
@@ -270,6 +280,12 @@ def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
                    and ln.upper() not in ("INVOICE", "BILL", "RECEIPT") and len(ln) > 3:
                     receiver = ln
                     break
+        # Mark HTML artifacts as missing
+        if receiver and "<!-- image -->" in receiver:
+            receiver = ""
+        # Flag unknown receivers as suspicious
+        elif receiver and is_whitelisted and not is_whitelisted("receiver", receiver):
+            flags.append("receiver_suspicious")
 
     iban = ""
     if "iban" not in skip_fields:
@@ -282,6 +298,8 @@ def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
         else:
             flags.append("iban_invalid_checksum")
             iban = ""
+    elif iban and is_whitelisted and not is_whitelisted("iban", iban):
+        flags.append("iban_suspicious")
 
     bic = ""
     if "bic" not in skip_fields:
@@ -304,15 +322,23 @@ def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
     dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
 
+    # Mark zero amounts as missing
+    if amount and (amount == "0" or float(amount) == 0.0):
+        amount = ""
+
     check = {"amount": amount, "currency": currency,
              "receiver": receiver, "due_date": due_date, "reference": reference}
     for field in mandatory:
         if not check[field]:
             flags.append(f"{field}_not_found")
 
-    # invoice_id: warn only, never blocks payment
+    # invoice_id: warn if missing or suspiciously short (< 6 chars, unless from Swiss QR)
     if not invoice_id:
         flags.append("invoice_id_not_found")
+    elif len(invoice_id) < 6:
+        # Short invoice IDs are suspicious unless from Swiss QR (which has long refs)
+        # This will be relaxed if coming from QR in pipeline
+        flags.append("invoice_id_suspicious")
 
     # due_date defaulted to end-of-month: warn, remove blocking error
     if due_date_defaulted:

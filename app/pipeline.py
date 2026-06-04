@@ -48,13 +48,20 @@ def _delete_debug_md(job_id: str, upload_dir: Path):
 def _merge_qr(fields: dict, qr: dict) -> dict:
     """Merge QR-extracted fields with regex-extracted fields. QR takes precedence."""
     from extract import ERROR_FLAGS
+    qr_filled = set()
     for key in ("iban", "bic", "receiver", "amount", "currency", "reference"):
         if qr.get(key):
             fields[key] = qr[key]
+            qr_filled.add(key)
 
     merged = qr.get("flags", []) + fields.get("flags", [])
     seen = set()
     merged = [f for f in merged if not (f in seen or seen.add(f))]
+
+    # Remove "field_not_found" flags for fields that QR provided
+    if qr_filled:
+        not_found_flags = {f"{k}_not_found" for k in qr_filled}
+        merged = [f for f in merged if f not in not_found_flags]
 
     if qr.get("iban") and "no_payment_method" in merged:
         merged = [f for f in merged if f != "no_payment_method"]
@@ -104,6 +111,18 @@ def run(pdf_path: str) -> dict:
         # No QR found, just ensure flags list is set
         flags = fields.get("flags", [])
         fields["review_reasons"] = "; ".join(flags)
+
+    # ── Step 5: Auto-whitelist valid fields ───────────────────────────────────
+    try:
+        import db
+        # Add receiver to whitelist if found and not suspicious
+        if fields.get("receiver") and "receiver_suspicious" not in fields.get("flags", []):
+            db.add_to_whitelist("receiver", fields["receiver"], filename)
+        # Add IBAN to whitelist if found and not suspicious
+        if fields.get("iban") and "iban_suspicious" not in fields.get("flags", []):
+            db.add_to_whitelist("iban", fields["iban"], filename)
+    except Exception as e:
+        print(f"[pipeline] Whitelist update failed: {e}", file=sys.stderr, flush=True)
 
     # ── Debug: save markdown if DEBUG_MD_DIR set ──────────────────────────────
     if DEBUG_MD_DIR:

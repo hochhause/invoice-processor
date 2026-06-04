@@ -26,6 +26,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS whitelist (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    value       TEXT NOT NULL UNIQUE,
+    source      TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_whitelist_type_value ON whitelist(type, value);
 """
 
 
@@ -79,3 +88,52 @@ def get_job(job_id: str):
     with get_db() as conn:
         r = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return dict(r) if r else None
+
+
+def is_whitelisted(type: str, value: str) -> bool:
+    """Check if a receiver/iban is in the whitelist."""
+    if not value:
+        return False
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM whitelist WHERE type = ? AND value = ?",
+            (type, value)
+        ).fetchone() is not None
+
+
+def add_to_whitelist(type: str, value: str, source: str = ""):
+    """Add receiver/iban to whitelist if not already present."""
+    if not value:
+        return
+    with get_db() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO whitelist (type, value, source) VALUES (?, ?, ?)",
+                (type, value, source)
+            )
+        except Exception:
+            pass  # Already exists
+
+
+def get_whitelist(type: str = None) -> list:
+    """Get all whitelisted items, optionally filtered by type."""
+    with get_db() as conn:
+        if type:
+            rows = conn.execute(
+                "SELECT * FROM whitelist WHERE type = ? ORDER BY created_at",
+                (type,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM whitelist ORDER BY type, created_at"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def clear_whitelist(type: str = None):
+    """Clear whitelist items (all or by type)."""
+    with get_db() as conn:
+        if type:
+            conn.execute("DELETE FROM whitelist WHERE type = ?", (type,))
+        else:
+            conn.execute("DELETE FROM whitelist")
