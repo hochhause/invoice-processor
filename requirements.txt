@@ -8,6 +8,6 @@ requests==2.32.3
 pytest==8.3.3
 pymupdf==1.24.14
 pyzbar==0.1.9
-zxingcpp>=2.2.0
+zxing-cpp>=2.2.0
 numpy>=1.26.0
 Pillow==11.1.0
