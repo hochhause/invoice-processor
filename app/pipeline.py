@@ -11,6 +11,7 @@ Debug mode: If DEBUG_MD_DIR is set, store extracted markdown to disk for inspect
 """
 import os
 import re
+import sys
 from pathlib import Path
 from markitdown import MarkItDown
 from md_clean import clean_markdown
@@ -88,7 +89,8 @@ def run(pdf_path: str, force_llm: bool = False) -> dict:
             result = _md.convert(pdf_path)
             raw_md = result.text_content or ""
             md = clean_markdown(raw_md)
-        except Exception:
+        except Exception as e:
+            print(f"[pipeline] mdx convert failed: {e}", file=sys.stderr, flush=True)
             md = ""
         if _is_garbage(md):
             force_llm = True
@@ -100,6 +102,7 @@ def run(pdf_path: str, force_llm: bool = False) -> dict:
             ocr_method = LLM_PROVIDER
             md = ocr_pdf_via_llm(pdf_path)
         except Exception as e:
+            print(f"[pipeline] LLM OCR failed for {os.path.basename(pdf_path)}: {e}", file=sys.stderr, flush=True)
             md = ""
             fields = extract_fields("", os.path.basename(pdf_path))
             fields["ocr_method"] = ocr_method if ocr_method != "mdx" else "llm"
@@ -117,7 +120,8 @@ def run(pdf_path: str, force_llm: bool = False) -> dict:
         qr = qr_swiss.extract_from_pdf(pdf_path)
         if qr:
             fields = _merge_qr(fields, qr)
-    except Exception:
+    except Exception as e:
+        print(f"[pipeline] QR scan failed for {os.path.basename(pdf_path)}: {e}", file=sys.stderr, flush=True)
         existing = fields.get("review_reasons", "")
         fields["review_reasons"] = "; ".join(filter(None, ["qr_scan_failed", existing]))
         fields["needs_review"] = "YES"

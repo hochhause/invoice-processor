@@ -454,35 +454,49 @@ async function submitReview(e) {
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────
+async function _apiFetch(url, opts = {}) {
+  try {
+    const r = await fetch(url, opts);
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.error(`[invoice-processor] ${opts.method || 'GET'} ${url} → ${r.status}`, body);
+    }
+    return r;
+  } catch (e) {
+    console.error(`[invoice-processor] fetch failed: ${opts.method || 'GET'} ${url}`, e);
+    throw e;
+  }
+}
+
 async function retryJob(id) {
-  await fetch(`/process/${id}`, { method: 'POST' });
+  await _apiFetch(`/process/${id}`, { method: 'POST' });
   refreshJobs();
 }
 
 async function retryAll() {
-  await fetch('/process-all', { method: 'POST' });
+  await _apiFetch('/process-all', { method: 'POST' });
   refreshJobs();
 }
 
 async function deleteJob(id) {
   if (!confirm('Remove this invoice?')) return;
-  await fetch(`/jobs/${id}`, { method: 'DELETE' });
+  await _apiFetch(`/jobs/${id}`, { method: 'DELETE' });
   refreshJobs();
 }
 
 async function clearAllInvoices() {
   if (!confirm('Delete ALL invoices? This cannot be undone.')) return;
-  await fetch('/api/clear-all', { method: 'DELETE' });
+  await _apiFetch('/api/clear-all', { method: 'DELETE' });
   refreshJobs();
 }
 
 async function queueLlm(id) {
-  await fetch(`/api/queue-llm/${id}`, { method: 'POST' });
+  await _apiFetch(`/api/queue-llm/${id}`, { method: 'POST' });
   refreshJobs();
 }
 
 async function runAiAll() {
-  const r = await fetch('/api/queue-llm-all', { method: 'POST' });
+  const r = await _apiFetch('/api/queue-llm-all', { method: 'POST' });
   const d = await r.json();
   document.getElementById('upload-status').textContent = `Queued ${d.queued} invoice(s) for AI processing.`;
   refreshJobs();

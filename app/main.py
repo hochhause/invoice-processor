@@ -99,7 +99,9 @@ async def process_one(job_id: str, background_tasks: BackgroundTasks):
 
 @app.post("/process-all")
 async def process_all(background_tasks: BackgroundTasks):
-    jobs = [j for j in db.get_all_jobs() if j["status"] in ("pending", "error")]
+    jobs = [j for j in db.get_all_jobs()
+            if j["status"] in ("pending", "error")
+            or (j["status"] == "done" and j.get("needs_review") == "YES")]
     for job in jobs:
         pdf = next(UPLOAD_DIR.glob(f"{job['id']}_*"), None)
         if pdf:

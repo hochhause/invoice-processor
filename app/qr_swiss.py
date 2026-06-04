@@ -42,6 +42,7 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
     except ImportError:
         return None
 
+    fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
     for page in doc:
         for dpi in (300, 150, 400):
