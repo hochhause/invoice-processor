@@ -31,9 +31,25 @@ Swiss QR-bill payload line layout (SIX standard 2.2):
 import re
 
 
+def _decode_spc(img, zbar_decode) -> str | None:
+    """Try pyzbar on img; return SPC payload string or None."""
+    for sym in zbar_decode(img):
+        data = sym.data.decode("utf-8", errors="replace")
+        data = data.replace("\r\n", "\n").replace("\r", "\n")
+        if data.startswith("SPC\n"):
+            return data
+    return None
+
+
 def _scan_pdf_qr(pdf_path: str) -> str | None:
     """Return raw QR payload string from first SPC QR code found in pdf, or None.
-    Tries multiple DPIs to handle low-res and high-res scans."""
+
+    Strategy per page:
+      1. Full page at 150/300/400 DPI
+      2. Bottom-half crop at 150/300/400 DPI (Swiss QR slip is always bottom portion)
+    Cropping the bottom half on a large page significantly boosts pyzbar detection
+    because the QR occupies a larger fraction of the smaller image.
+    """
     try:
         import fitz
         from pyzbar.pyzbar import decode as zbar_decode
@@ -42,19 +58,32 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
     except ImportError:
         return None
 
+    import sys
     fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
-    for page in doc:
-        for dpi in (300, 150, 400):
+    for page_num, page in enumerate(doc):
+        for dpi in (150, 300, 400):
             pix = page.get_pixmap(dpi=dpi)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
-            for sym in zbar_decode(img):
-                data = sym.data.decode("utf-8", errors="replace")
-                # normalise line endings (some generators use CRLF)
-                data = data.replace("\r\n", "\n").replace("\r", "\n")
-                if data.startswith("SPC\n"):
-                    doc.close()
-                    return data
+
+            # 1. full page
+            result = _decode_spc(img, zbar_decode)
+            if result:
+                print(f"[qr_swiss] found SPC on page {page_num+1} full at {dpi}dpi", file=sys.stderr, flush=True)
+                doc.close()
+                return result
+
+            # 2. bottom third, center 60% (Swiss QR slip location)
+            w, h = img.size
+            bottom = img.crop((w * 2 // 10, h * 2 // 3, w * 8 // 10, h))
+            result = _decode_spc(bottom, zbar_decode)
+            if result:
+                print(f"[qr_swiss] found SPC on page {page_num+1} bottom-crop at {dpi}dpi", file=sys.stderr, flush=True)
+                doc.close()
+                return result
+
+        print(f"[qr_swiss] no SPC found on page {page_num+1} of {pdf_path}", file=sys.stderr, flush=True)
+
     doc.close()
     return None
 
