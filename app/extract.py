@@ -346,3 +346,37 @@ def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
         "flags": deduped,          # structured list for pipeline merging
         "ocr_method": "",          # filled by pipeline.py
     }
+
+
+def llm_extract_field(md: str, field: str) -> str:
+    """Ask Haiku to extract a single missing field from markdown (Tier 1 fallback)."""
+    import os
+
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        return ""
+
+    prompt = f"""Extract the {field} from this invoice markdown.
+Return ONLY the extracted value, nothing else. No explanation.
+If the {field} is not found, return: NOT_FOUND
+
+Field to extract: {field}
+
+Markdown:
+{md[:2000]}
+"""
+
+    try:
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = response.content[0].text.strip()
+        return "" if result == "NOT_FOUND" else result
+    except Exception as e:
+        print(f"[llm_extract_field] Failed for {field}: {e}")
+        return ""

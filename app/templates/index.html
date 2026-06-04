@@ -163,6 +163,9 @@
           <button type="button" class="btn btn-secondary" id="btn-modal-dev-fill" onclick="fillCurrentWithDevData()" title="[DEV] Auto-fill missing fields">
             <span>⚙️</span> [DEV] Fill
           </button>
+          <button type="button" class="btn btn-ai" id="btn-retry-ai" onclick="retryWithAI()" style="display:none" title="Extract missing fields with AI">
+            <span>🤖</span> Retry with AI
+          </button>
           <button type="submit" class="btn btn-primary">Save &amp; Mark Reviewed</button>
         </div>
       </form>
@@ -434,6 +437,15 @@ async function openModal(jobId) {
   for (const f of FIELDS) {
     document.getElementById(FIELD_IDS[f]).value = job[f] || '';
   }
+
+  // Show "Retry with AI" button only if LLM is available AND there are missing fields
+  const mandatoryFields = ['amount', 'currency', 'receiver', 'due_date', 'reference'];
+  const hasMissing = mandatoryFields.some(f => !job[f] || job[f].trim() === '');
+  const btnRetryAi = document.getElementById('btn-retry-ai');
+  if (btnRetryAi && btnRetryAi.style.display !== 'none') {
+    btnRetryAi.style.display = hasMissing ? 'block' : 'none';
+  }
+
   modal.showModal();
 }
 
@@ -654,11 +666,59 @@ function initTheme() {
   if (icon) icon.textContent = saved === 'dark' ? '☀️' : '🌙';
 }
 
+// ── LLM Fallback (Tier 1) ──────────────────────────────────────────────────
+async function initLLMButton() {
+  try {
+    const res = await fetch('/api/llm-available');
+    const {available} = await res.json();
+    const btnRetryAi = document.getElementById('btn-retry-ai');
+    if (btnRetryAi) {
+      btnRetryAi.style.display = available ? 'block' : 'none';
+    }
+  } catch (e) {
+    console.warn('[LLM] Health check failed:', e);
+  }
+}
+
+async function retryWithAI() {
+  const jobId = document.getElementById('modal-job-id').value;
+  if (!jobId) return;
+
+  const btn = document.getElementById('btn-retry-ai');
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span>⏳</span> Processing...';
+
+  try {
+    const res = await _apiFetch(`/api/retry-ai/${jobId}`, { method: 'POST' });
+    const {updated, status, error} = await res.json();
+
+    if (error) {
+      alert(`Error: ${error}`);
+    } else if (Object.keys(updated).length > 0) {
+      alert(`✓ Updated fields: ${Object.keys(updated).join(', ')}`);
+      closeModal();
+      refreshJobs();
+    } else {
+      alert('No additional fields could be extracted.');
+    }
+  } catch (e) {
+    alert(`Failed to retry with AI: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+  }
+}
+
 // Wait for DOM then init
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initTheme);
+  document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    initLLMButton();
+  });
 } else {
   initTheme();
+  initLLMButton();
 }
 
 // Initial load

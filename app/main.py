@@ -7,6 +7,8 @@ Routes:
   POST /process/{id}  → start processing a queued job
   POST /process-all   → process all pending jobs
   GET  /api/jobs      → JSON list of all jobs (for HTMX polling)
+  GET  /api/llm-available → check if Tier 1 LLM fallback is configured
+  POST /api/retry-ai/{id} → extract missing fields with Haiku (Tier 1)
   GET  /download/csv  → download all processed rows as CSV
   DELETE /jobs/{id}   → remove a job record + its file
 """
@@ -25,6 +27,8 @@ from fastapi.templating import Jinja2Templates
 import db
 import pipeline
 import xml_export
+from config import llm_available
+from extract import llm_extract_field
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,6 +37,8 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # Test LLM availability (cached, one-time cost ~20 tokens at startup)
+    llm_available()
     # Run startup tests in DEV_MODE
     if os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes"):
         try:
@@ -221,3 +227,60 @@ async def download_xml():
         media_type="application/xml",
         headers={"Content-Disposition": "attachment; filename=pain001.xml"},
     )
+
+
+@app.get("/api/llm-available")
+async def api_llm_available():
+    """Check if Tier 1 LLM fallback is configured and working."""
+    return {"available": llm_available()}
+
+
+@app.post("/api/retry-ai/{job_id}")
+async def retry_with_ai(job_id: str):
+    """Reprocess missing fields with Tier 1 (Haiku) markdown extraction."""
+    if not llm_available():
+        return JSONResponse(
+            {"error": "LLM fallback not configured"}, status_code=503
+        )
+
+    job = db.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    # Get markdown from debug dir
+    debug_md_dir = os.environ.get("DEBUG_MD_DIR", "")
+    if not debug_md_dir:
+        return JSONResponse(
+            {"error": "Markdown not available (DEBUG_MD_DIR not set)"}, status_code=400
+        )
+
+    md_path = Path(debug_md_dir) / f"{job['filename']}.md"
+    if not md_path.exists():
+        return JSONResponse(
+            {"error": "Markdown file not found"}, status_code=400
+        )
+
+    md = md_path.read_text()
+
+    # Identify missing mandatory fields (empty values)
+    missing = []
+    for field in ["amount", "currency", "receiver", "due_date", "reference"]:
+        if not job.get(field, "").strip():
+            missing.append(field)
+
+    if not missing:
+        return JSONResponse({"status": "all_fields_present"})
+
+    # Extract each missing field with Haiku
+    updates = {}
+    for field_name in missing:
+        extracted = llm_extract_field(md, field_name)
+        if extracted:
+            updates[field_name] = extracted
+
+    # Update DB
+    if updates:
+        updates["ocr_method"] = "docling+llm"
+        db.upsert_job(job_id, **updates)
+
+    return JSONResponse({"updated": updates, "status": "retry_complete"})
