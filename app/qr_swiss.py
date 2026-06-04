@@ -33,14 +33,29 @@ import re
 
 
 def _decode_spc(img, zbar_decode) -> str | None:
-    """Try pyzbar on img; return SPC payload string or None.
-    Converts to grayscale first — pyzbar struggles with RGBA/RGB PNG mode."""
+    """Try pyzbar then zxingcpp on img; return SPC payload string or None."""
+    import numpy as np
     gray = img.convert("L")
+
+    # pyzbar
     for sym in zbar_decode(gray):
         data = sym.data.decode("utf-8", errors="replace")
         data = data.replace("\r\n", "\n").replace("\r", "\n")
         if data.startswith("SPC\n"):
             return data
+
+    # zxingcpp fallback
+    try:
+        import zxingcpp
+        arr = np.array(gray)
+        results = zxingcpp.read_barcodes(arr)
+        for r in results:
+            data = r.text.replace("\r\n", "\n").replace("\r", "\n")
+            if data.startswith("SPC\n"):
+                return data
+    except ImportError:
+        pass
+
     return None
 
 
@@ -74,7 +89,7 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
         Path(debug_dir).mkdir(parents=True, exist_ok=True)
         _attempt[0] += 1
         prefix = "FOUND" if found else "EMPTY"
-        img.save(Path(debug_dir) / f"{prefix}_{_attempt[0]:03d}_{base}_{label}.png")
+        img.convert("L").save(Path(debug_dir) / f"{prefix}_{_attempt[0]:03d}_{base}_{label}.png")
 
     fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
