@@ -28,6 +28,7 @@ Swiss QR-bill payload line layout (SIX standard 2.2):
   30 EPD
   31+ alternative procedures (optional)
 """
+import os
 import re
 
 
@@ -59,6 +60,17 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
         return None
 
     import sys
+    from pathlib import Path
+
+    debug_dir = os.environ.get("DEBUG_QR_DIR", "")
+    base = os.path.splitext(os.path.basename(pdf_path))[0]
+
+    def _save_debug(img, label):
+        if not debug_dir:
+            return
+        Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        img.save(Path(debug_dir) / f"{base}_{label}.png")
+
     fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
     for page_num, page in enumerate(doc):
@@ -67,6 +79,7 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
             img = Image.open(io.BytesIO(pix.tobytes("png")))
 
             # 1. full page
+            _save_debug(img, f"p{page_num+1}_{dpi}dpi_full")
             result = _decode_spc(img, zbar_decode)
             if result:
                 print(f"[qr_swiss] found SPC on page {page_num+1} full at {dpi}dpi", file=sys.stderr, flush=True)
@@ -76,6 +89,7 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
             # 2. bottom third, center 60% (Swiss QR slip location)
             w, h = img.size
             bottom = img.crop((w * 2 // 10, h * 2 // 3, w * 8 // 10, h))
+            _save_debug(bottom, f"p{page_num+1}_{dpi}dpi_crop")
             result = _decode_spc(bottom, zbar_decode)
             if result:
                 print(f"[qr_swiss] found SPC on page {page_num+1} bottom-crop at {dpi}dpi", file=sys.stderr, flush=True)
