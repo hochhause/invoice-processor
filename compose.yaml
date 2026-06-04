@@ -9,10 +9,9 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    # Ollama on host: host.docker.internal works on Docker Desktop + Podman
-    # For rootless Podman, use --network=host or set LLM_URL to host IP
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Ollama on host: Podman auto-injects host.containers.internal → no extra_hosts needed
+    # Docker Desktop: use host.docker.internal in LLM_URL instead
+    # Docker on Linux: add extra_hosts: ["host.docker.internal:host-gateway"]
 
 volumes:
   invoice_processor_data:

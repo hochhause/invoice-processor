@@ -3,6 +3,7 @@ FROM python:3.11-slim
 # pdfplumber needs poppler for some PDF types; markitdown needs it too
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
+    libzbar0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

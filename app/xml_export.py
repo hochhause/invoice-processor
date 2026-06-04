@@ -49,12 +49,11 @@ def build_pain001(jobs: list[dict], debtor: dict) -> str:
     Returns:
         UTF-8 XML string
     """
-    # Filter: only done jobs with IBAN + BIC
+    # Filter: only done jobs with at least an IBAN (BIC optional for Swiss QR)
     payable = [
         j for j in jobs
         if j.get("status") == "done"
         and j.get("iban", "").strip()
-        and j.get("bic", "").strip()
     ]
 
     if not payable:
@@ -145,10 +144,12 @@ def _add_tx(pmt: ET.Element, job: dict, ccy: str):
     instd = _sub(amt, "InstdAmt", f"{_parse_amount(job.get('amount','0')):.2f}")
     instd.set("Ccy", ccy)
 
-    # Creditor agent (beneficiary bank)
-    cdtr_agt = _sub(tx, "CdtrAgt")
-    fin = _sub(cdtr_agt, "FinInstnId")
-    _sub(fin, "BIC", job.get("bic", "")[:11])
+    # Creditor agent — omit entirely if no BIC (Swiss QR domestic payments)
+    bic = job.get("bic", "").strip()
+    if bic:
+        cdtr_agt = _sub(tx, "CdtrAgt")
+        fin = _sub(cdtr_agt, "FinInstnId")
+        _sub(fin, "BIC", bic[:11])
 
     # Creditor
     cdtr = _sub(tx, "Cdtr")
@@ -173,12 +174,20 @@ def _parse_amount(s: str) -> float:
         return 0.0
 
 
+def _to_iso_date(d: str) -> str | None:
+    """Convert dd.mm.yyyy or YYYY-MM-DD to YYYY-MM-DD, or None if unparseable."""
+    if not d:
+        return None
+    for fmt, out in (("%d.%m.%Y", "%Y-%m-%d"), ("%Y-%m-%d", "%Y-%m-%d")):
+        try:
+            return datetime.strptime(d, fmt).strftime(out)
+        except ValueError:
+            pass
+    return None
+
+
 def _earliest_date(jobs: list[dict]) -> str:
-    dates = []
-    for j in jobs:
-        d = j.get("due_date", "")
-        if d and len(d) == 10:
-            dates.append(d)
+    dates = [iso for j in jobs if (iso := _to_iso_date(j.get("due_date", "")))]
     if dates:
         return min(dates)
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")

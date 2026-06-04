@@ -55,6 +55,7 @@ def _process_job(job_id: str, pdf_path: str, force_llm: bool = False):
     db.upsert_job(job_id, status="processing")
     try:
         fields = pipeline.run(pdf_path, force_llm=force_llm)
+        fields.pop("flags", None)  # in-memory only, not a DB column
         db.upsert_job(job_id, status="done", **fields)
     except Exception as e:
         db.upsert_job(job_id, status="error", error_msg=str(e))

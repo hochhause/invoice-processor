@@ -48,6 +48,30 @@ def _delete_debug_md(job_id: str, upload_dir: Path):
         md_file.unlink(missing_ok=True)
 
 
+def _merge_qr(fields: dict, qr: dict) -> dict:
+    """Overwrite regex fields with QR values where QR has data, merge flags."""
+    from extract import ERROR_FLAGS
+    for key in ("iban", "bic", "receiver", "amount", "currency", "reference"):
+        if qr.get(key):
+            fields[key] = qr[key]
+
+    # merge flag lists (QR flags first so they appear prominently)
+    merged = qr.get("flags", []) + fields.get("flags", [])
+    seen = set()
+    merged = [f for f in merged if not (f in seen or seen.add(f))]
+
+    # QR resolves no_payment_method if it provided an IBAN
+    if qr.get("iban") and "no_payment_method" in merged:
+        merged = [f for f in merged if f != "no_payment_method"]
+
+    fields["flags"] = merged
+    fields["review_reasons"] = "; ".join(merged)
+    has_error = any(f in ERROR_FLAGS or f.startswith("llm_fallback_failed") for f in merged)
+    fields["needs_review"] = "YES" if has_error else "NO"
+    fields["ocr_method"] = fields.get("ocr_method", "mdx") + "+qr"
+    return fields
+
+
 def run(pdf_path: str, force_llm: bool = False) -> dict:
     """
     Returns dict with keys: invoice_id, receiver, iban, bic, bankgiro,
@@ -86,6 +110,17 @@ def run(pdf_path: str, force_llm: bool = False) -> dict:
     # ── Step 3: extraction ───────────────────────────────────────────────────
     fields = extract_fields(md, os.path.basename(pdf_path))
     fields["ocr_method"] = ocr_method
+
+    # ── Step 3b: Swiss QR-bill — overrides regex for IBAN/amount/receiver/ref ─
+    try:
+        import qr_swiss
+        qr = qr_swiss.extract_from_pdf(pdf_path)
+        if qr:
+            fields = _merge_qr(fields, qr)
+    except Exception:
+        existing = fields.get("review_reasons", "")
+        fields["review_reasons"] = "; ".join(filter(None, ["qr_scan_failed", existing]))
+        fields["needs_review"] = "YES"
 
     # ── Debug: save markdown if DEBUG_MD_DIR set ──────────────────────────────
     if DEBUG_MD_DIR:

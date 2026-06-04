@@ -606,12 +606,9 @@ body {
 }
 
 .cell-notes {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--lf-warning);
+  max-width: 260px;
   font-size: 12px;
+  line-height: 1.6;
 }
 
 .cell-actions {
@@ -659,10 +656,20 @@ body {
 }
 
 .badge-review {
-  background: #fef3c7;
-  color: #92400e;
+  background: #fee2e2;
+  color: #991b1b;
   font-weight: 700;
   animation: pulse-badge 1.5s infinite;
+}
+
+.badge-warn {
+  background: #fef3c7;
+  color: #78350f;
+  font-weight: 600;
+}
+[data-theme="dark"] .badge-warn {
+  background: #451a03;
+  color: #fde68a;
 }
 
 .badge-mdx {
@@ -677,6 +684,37 @@ body {
   font-size: 10px;
   font-weight: 700;
 }
+
+/* ── Flag pills (notes column) ─────────────────────────────────────────────── */
+.flag-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  margin: 1px 2px 1px 0;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.flag-info {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.flag-warn {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.flag-err {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+[data-theme="dark"] .flag-info { background: #064e3b; color: #6ee7b7; }
+[data-theme="dark"] .flag-warn { background: #422006; color: #fcd34d; }
+[data-theme="dark"] .flag-err  { background: #450a0a; color: #fca5a5; }
 
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 .review-modal {

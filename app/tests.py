@@ -109,7 +109,8 @@ order no: ORD-999
     except ET.ParseError as e:
         failures.append(f"FAIL [T5-multi-xml]: {e}")
 
-    # ── T6: Jobs missing IBAN/BIC are skipped ─────────────────────────────────
+    # ── T6: Jobs missing IBAN are skipped; IBAN-only (no BIC) are included ───────
+    # BIC is optional for Swiss QR-bill and SEPA — only IBAN is mandatory.
     jobs_skip = [
         {"status": "done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
          "currency": "CHF", "receiver": "X", "invoice_id": "I3", "due_date": "2026-07-01", "reference": "R3"},
@@ -122,8 +123,9 @@ order no: ORD-999
         root3 = ET.fromstring(xml_skip.split("\n", 1)[1])
         ns = {"p": "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"}
         nb3 = root3.find(".//p:NbOfTxs", ns)
-        check("T6-skip-no-iban-bic", nb3 is not None and nb3.text == "0",
-              f"Expected NbOfTxs=0 when all jobs missing IBAN/BIC, got {nb3.text if nb3 is not None else None}")
+        # Only the IBAN-only job passes; the no-IBAN job is skipped → NbOfTxs=1
+        check("T6-skip-no-iban", nb3 is not None and nb3.text == "1",
+              f"Expected NbOfTxs=1 (IBAN-only job included, no-IBAN job skipped), got {nb3.text if nb3 is not None else None}")
     except ET.ParseError as e:
         failures.append(f"FAIL [T6-skip-xml]: {e}")
 
