@@ -33,8 +33,10 @@ import re
 
 
 def _decode_spc(img, zbar_decode) -> str | None:
-    """Try pyzbar on img; return SPC payload string or None."""
-    for sym in zbar_decode(img):
+    """Try pyzbar on img; return SPC payload string or None.
+    Converts to grayscale first — pyzbar struggles with RGBA/RGB PNG mode."""
+    gray = img.convert("L")
+    for sym in zbar_decode(gray):
         data = sym.data.decode("utf-8", errors="replace")
         data = data.replace("\r\n", "\n").replace("\r", "\n")
         if data.startswith("SPC\n"):
@@ -64,13 +66,15 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
 
     debug_dir = os.environ.get("DEBUG_QR_DIR", "")
     base = os.path.splitext(os.path.basename(pdf_path))[0]
+    _attempt = [0]
 
     def _save_debug(img, label, found):
         if not debug_dir:
             return
         Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        _attempt[0] += 1
         prefix = "FOUND" if found else "EMPTY"
-        img.save(Path(debug_dir) / f"{prefix}_{base}_{label}.png")
+        img.save(Path(debug_dir) / f"{prefix}_{_attempt[0]:03d}_{base}_{label}.png")
 
     fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
