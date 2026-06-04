@@ -164,19 +164,27 @@ body {
 
 .theme-toggle {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.8);
-  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 10px 14px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 18px;
   transition: all var(--transition-fast);
   line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.theme-toggle:focus {
   border-color: var(--lf-teal-primary);
   color: var(--lf-teal-primary);
+  background: rgba(34, 186, 160, 0.1);
+  outline: none;
 }
 
 /* ── Main container ────────────────────────────────────────────────────────── */
@@ -433,6 +441,40 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+  flex: 1;
+}
+
+.search-input {
+  padding: 10px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+  color: var(--lf-text-dark);
+  background: var(--lf-bg-off-white);
+  transition: all var(--transition-fast);
+  min-width: 200px;
+  max-width: 300px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--lf-teal-primary);
+  background: white;
+  box-shadow: 0 0 0 3px rgba(34, 186, 160, 0.1);
+}
+
+[data-theme="dark"] .search-input {
+  background: #2a2a2a;
+  border-color: #444444;
+  color: var(--lf-text-dark);
+}
+
+[data-theme="dark"] .search-input:focus {
+  background: #1a1a1a;
+  border-color: var(--lf-teal-primary);
+  box-shadow: 0 0 0 3px rgba(34, 186, 160, 0.2);
 }
 
 /* ── Table section ─────────────────────────────────────────────────────────── */
@@ -463,13 +505,32 @@ body {
 }
 
 .invoice-table thead th {
-  padding: 12px 14px;
+  padding: 14px 10px;
   text-align: left;
   font-weight: 600;
   letter-spacing: 0.3px;
   text-transform: uppercase;
   font-size: 11px;
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+.invoice-table thead th:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.invoice-table thead th.sort-asc::after {
+  content: ' ▲';
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.invoice-table thead th.sort-desc::after {
+  content: ' ▼';
+  font-size: 10px;
+  opacity: 0.7;
 }
 
 .invoice-table tbody tr {
@@ -478,12 +539,17 @@ body {
 }
 
 .invoice-table tbody tr:hover {
-  background: rgba(34, 186, 160, 0.02);
+  background: rgba(34, 186, 160, 0.05);
+}
+
+.invoice-table tbody tr.hidden {
+  display: none;
 }
 
 .invoice-table tbody td {
-  padding: 12px 14px;
+  padding: 11px 10px;
   vertical-align: middle;
+  font-size: 13px;
 }
 
 .invoice-row.row-processing {

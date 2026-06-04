@@ -97,6 +97,8 @@ DEFAULT_PATTERNS = {
         r"INVOICE\s+NUMBER\s*\|\s*([\w\-]+)",
         r"Invoice\s+number[:\s#]*([A-Z0-9\-]+)",
         r"invoice\s*(?:no|#)[:\s#]*([A-Z0-9\-]+)",
+        r"No\.?\s*([A-Z0-9\-]+)",
+        r"invoice.{0,5}no\.?\s+([A-Z0-9\-]+)",
     ],
     "amount": [
         r"\|\s*Total\s*\|\s*([\d,\.]+)\s*\|",
@@ -110,7 +112,8 @@ DEFAULT_PATTERNS = {
     ],
     "iban": [
         r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{11,30})",
-        r"\b([A-Z]{2}\d{2}[A-Z0-9]{4}\d{7,})\b",
+        r"IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,})",
+        r"\b([A-Z]{2}\d{2}[A-Z0-9]{11,30})\b",
     ],
     "bic": [
         r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
