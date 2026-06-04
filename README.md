@@ -4,9 +4,9 @@ Intelligent invoice extraction, validation, and export system for mass payment p
 
 ## What It Does
 
-1. **PDF Upload & OCR** — Accepts PDF invoices and extracts text via `markitdown`
-2. **Field Extraction** — Regex-based pattern matching for invoice ID, amount, currency, IBAN, BIC, due date, and reference
-3. **LLM Fallback** — When OCR output is sparse, delegates to Ollama/Claude/DeepSeek for structured extraction
+1. **PDF Upload & OCR** — Accepts PDF invoices and extracts text via `Docling` (local ML-based layout analysis + OCR)
+2. **QR Code Extraction** — Decodes Swiss QR codes first (if present) to lock known payment fields
+3. **Field Extraction** — Regex-based pattern matching for invoice ID, amount, currency, IBAN, BIC, due date, and reference
 4. **Web Review Interface** — Modal-based editing and validation of extracted fields
 5. **Multi-Format Export**:
    - **ISO 20022 pain.001.001.03 XML** — Pain format compatible with BLKB, Raiffeisen, UBS, BKB ebanking portals
@@ -22,7 +22,7 @@ Intelligent invoice extraction, validation, and export system for mass payment p
 ### Prerequisites
 
 - **Docker** or **Podman** (5.0+)
-- **Ollama** (optional, for LLM fallback) — running locally on port 11434
+- **Memory**: ≥2GB RAM (for Docling model cache)
 
 ### Quick Start
 
@@ -35,7 +35,6 @@ cd invoice-processor
 cp .env.example .env
 
 # Edit .env to configure:
-# - LLM provider (ollama/claude/deepseek)
 # - DEBTOR company details (for pain.001 generation)
 # - DEV_MODE (for startup tests + auto-fill)
 
@@ -48,17 +47,6 @@ podman compose up --build -d
 ### Environment Variables
 
 ```env
-# LLM Configuration
-LLM_PROVIDER=ollama           # Options: ollama, claude, deepseek
-LLM_URL=http://host.docker.internal:11434
-LLM_MODEL=llama3.2
-
-# For claude provider:
-# LLM_PROVIDER=claude
-# LLM_URL=https://api.anthropic.com
-# LLM_MODEL=claude-haiku-4-5-20251001
-# ANTHROPIC_API_KEY=sk-ant-...
-
 # Pain.001 Sender (Debtor) — Your company details
 DEBTOR_NAME=Your Company AG
 DEBTOR_IBAN=CH56...  # Your company's IBAN
@@ -67,19 +55,6 @@ DEBTOR_BIC=BLKBCH22  # Your bank's BIC
 # Development mode
 DEV_MODE=true        # Enables startup tests + synthetic data fill buttons
 ```
-
-### Ollama Setup (Optional, for LLM fallback)
-
-If using Ollama:
-
-```bash
-# Install Ollama: https://ollama.ai
-# Run locally with model:
-ollama serve &
-ollama pull llama3.2
-```
-
-The app will auto-fall back to Ollama if OCR extraction is incomplete.
 
 ### Volume Configuration
 
@@ -105,11 +80,11 @@ podman volume inspect invoice_processor_data
 ```
 PDF Upload
     ↓
-markitdown (text extraction)
+QR Code Extraction (qr_swiss.py)
     ↓
-(OCR output < MDX_MIN_CHARS?) → LLM fallback
+Docling (text extraction + layout analysis)
     ↓
-extract_fields (regex patterns)
+extract_fields (regex patterns, skip fields locked by QR)
     ↓
 SQLite DB (invoices.db)
     ↓
@@ -122,12 +97,13 @@ Export: pain.001 XML or CSV
 
 #### 1. **PDF → Markdown** (`app/pipeline.py`)
 
-Uses [markitdown](https://github.com/microsoft/markitdown) for intelligent PDF text extraction without external OCR services.
+Uses [Docling](https://github.com/DS4SD/docling) for ML-based document layout analysis and text extraction.
 
 ```
-- Handles scanned PDFs (image-based)
-- Extracts tables, headers, structured text
-- Returns markdown for regex pattern matching
+- Handles scanned PDFs (image-based) via built-in OCR
+- Extracts tables, headers, structured text with layout awareness
+- Returns clean markdown for regex pattern matching
+- Runs locally (no external API required)
 ```
 
 #### 2. **Field Extraction** (`app/extract.py`)
@@ -145,18 +121,13 @@ Regex-based pattern matching with bank-specific rule sets (configurable via `CSV
 - IBAN MOD-97 checksum (ISO 13616) — no external dependencies
 - BIC regex pattern enforcement (A-Z bank code + country + location)
 
-#### 3. **LLM Fallback** (`app/llm.py`)
+#### 3. **Swiss QR Code Extraction** (`app/qr_swiss.py`)
 
-If OCR confidence is low (< `MDX_MIN_CHARS`):
+Decodes ISO 20022 SPC (Structured Post Code) QR codes from invoices.
 
-- Sends markdown to Ollama/Claude/DeepSeek with structured JSON schema
-- Returns extracted fields
-- Logs OCR method for audit trail
-
-Providers:
-- **Ollama** (local, fast, free) — `llama3.2` or other quantized models
-- **Claude** (Anthropic) — `claude-haiku-4-5-20251001` (most reliable)
-- **DeepSeek** (fast, cost-effective) — `deepseek-chat`
+- Extracts: IBAN, receiver, amount, currency, reference (if present)
+- Fields locked by QR are skipped in regex pattern matching (prevents contradictions)
+- Logs `ocr_method = "docling+qr"` for invoices with QR
 
 #### 4. **ISO 20022 pain.001 Export** (`app/xml_export.py`)
 
@@ -192,7 +163,6 @@ Banks accepting pain.001 format:
 - `POST /api/review/{id}` — Update invoice fields
 - `DELETE /api/jobs/{id}` — Delete invoice
 - `DELETE /api/clear-all` — Delete all
-- `POST /api/queue-llm/{id}` — Reprocess with LLM
 - `GET /download/xml` — Export pain.001
 - `GET /download/csv` — Export CSV
 
@@ -215,11 +185,10 @@ Fails the container startup if tests don't pass (safety check).
 
 | Tool | Purpose | Link |
 |------|---------|------|
-| **markitdown** | PDF → Markdown OCR | [microsoft/markitdown](https://github.com/microsoft/markitdown) |
+| **Docling** | PDF → Markdown (ML layout analysis + OCR) | [DS4SD/docling](https://github.com/DS4SD/docling) |
 | **fastapi** | Web framework + REST API | [FastAPI](https://fastapi.tiangolo.com) |
-| **pdfplumber** | PDF text/table extraction | [pdfplumber](https://github.com/jamesturk/pdfplumber) |
-| **Ollama** | Local LLM inference | [Ollama](https://ollama.ai) |
-| **Claude API** | LLM fallback (Anthropic) | [Anthropic](https://anthropic.com) |
+| **pymupdf** | PDF page rendering for QR extraction | [PyMuPDF](https://pymupdf.readthedocs.io) |
+| **pyzbar** | QR code decoding | [pyzbar](https://github.com/NaturalHistoryMuseum/pyzbar) |
 
 #### Standards & Formats
 
@@ -260,7 +229,7 @@ CREATE TABLE jobs (
   reference TEXT,
   needs_review TEXT (YES|NO),
   review_reasons TEXT,
-  ocr_method TEXT (markitdown|llm),
+  ocr_method TEXT (docling|docling+qr),
   error_msg TEXT,
   created_at TEXT,
   updated_at TEXT
@@ -315,17 +284,11 @@ podman compose logs -f app
 
 ## Troubleshooting
 
-### Ollama Not Found
+### Docling Model Download
 
-If you see "Connection refused" on LLM calls:
+On first run, Docling downloads ~500MB of models. This happens during container build (via the pre-bake RUN step in Dockerfile). Subsequent runs use cached models.
 
-```bash
-# Ensure Ollama is running and accessible
-ollama serve &
-
-# From inside container, verify connectivity:
-podman exec <container> curl http://host.docker.internal:11434/api/tags
-```
+If you see model download warnings during runtime, this is normal — models are cached after first download.
 
 ### OneDrive Sync Issues
 

@@ -1,0 +1,19 @@
+{
+  "invoice_id": "",
+  "receiver": "<!-- image -->",
+  "iban": "CH4804835167777581000",
+  "bic": "CRESCHZZ80A",
+  "bankgiro": "",
+  "plusgiro": "",
+  "amount": "989.00",
+  "currency": "CHF",
+  "due_date": "13.10.2024",
+  "reference": "",
+  "needs_review": "YES",
+  "review_reasons": "reference_not_found; invoice_id_not_found",
+  "flags": [
+    "reference_not_found",
+    "invoice_id_not_found"
+  ],
+  "ocr_method": "docling"
+}

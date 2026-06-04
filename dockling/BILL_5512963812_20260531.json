@@ -1,0 +1,24 @@
+{
+  "invoice_id": "",
+  "receiver": "",
+  "iban": "",
+  "bic": "",
+  "bankgiro": "",
+  "plusgiro": "",
+  "amount": "",
+  "currency": "",
+  "due_date": "30.06.2026",
+  "reference": "",
+  "needs_review": "YES",
+  "review_reasons": "currency_not_found; amount_not_found; receiver_not_found; reference_not_found; invoice_id_not_found; due_date_defaulted; no_payment_method",
+  "flags": [
+    "currency_not_found",
+    "amount_not_found",
+    "receiver_not_found",
+    "reference_not_found",
+    "invoice_id_not_found",
+    "due_date_defaulted",
+    "no_payment_method"
+  ],
+  "ocr_method": "docling"
+}

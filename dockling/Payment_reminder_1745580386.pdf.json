@@ -1,0 +1,19 @@
+{
+  "invoice_id": "1745580386",
+  "receiver": "<!-- image -->",
+  "iban": "",
+  "bic": "",
+  "bankgiro": "",
+  "plusgiro": "",
+  "amount": "31.01.2026",
+  "currency": "CHF",
+  "due_date": "04.03.2026",
+  "reference": "",
+  "needs_review": "YES",
+  "review_reasons": "reference_not_found; no_payment_method",
+  "flags": [
+    "reference_not_found",
+    "no_payment_method"
+  ],
+  "ocr_method": "docling"
+}

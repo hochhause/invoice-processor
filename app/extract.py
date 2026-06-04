@@ -146,6 +146,7 @@ DEFAULT_PATTERNS = {
         r"invoice\s*(?:no|#)[:\s#]*([A-Z0-9\-]+)",
         r"Rechnungsnummer[:\s#]*([A-Z0-9\-\.]+)",
         r"Rechnungs-?Nr\.?[:\s#]*([A-Z0-9\-\.]+)",
+        r"Auftrag[:\s]+([A-Z0-9\-]+)",
         r"No\.?\s*([A-Z0-9\-]+)",
         r"invoice.{0,5}no\.?\s+([A-Z0-9\-]+)",
     ],
@@ -198,6 +199,8 @@ DEFAULT_PATTERNS = {
         r"Beneficiary\s+Account\s+Number[:\s]+([0-9]+)",
         r"ORDER\s+NUMBER\s*\|\s*\|\s*([\w\-]+)",
         r"order\s*(?:number|no)[:\s#]*([A-Z0-9\-]+)",
+        r"## Referenz\s*\n+\s*([0-9\s]+)",
+        r"Referenz[:\s]+([0-9]{2}\s+[0-9]{5}\s+[0-9\s]+)",
     ],
 }
 
@@ -231,38 +234,47 @@ def _load_rule_set() -> dict:
     return patterns
 
 
-def extract_fields(md: str, filename: str) -> dict:
+def extract_fields(md: str, filename: str, skip_fields: set = None) -> dict:
+    if skip_fields is None:
+        skip_fields = set()
     patterns = _load_rule_set()
     flags = []
 
-    invoice_id = _first_match(patterns["invoice_id"], md)
+    invoice_id = _first_match(patterns["invoice_id"], md) if "invoice_id" not in skip_fields else ""
 
-    amount_raw = _first_match(patterns["amount"], md)
-    amount = _clean_amount(amount_raw) if amount_raw else ""
+    amount = ""
+    if "amount" not in skip_fields:
+        amount_raw = _first_match(patterns["amount"], md)
+        amount = _clean_amount(amount_raw) if amount_raw else ""
 
     currency = ""
-    m = re.search(CURRENCY_PATTERN, md, re.IGNORECASE)
-    if m:
-        currency = m.group(1).upper()
-    else:
-        for symbol, code in CURRENCY_SYMBOL_MAP.items():
-            if symbol in md:
-                currency = code
-                break
-    if not currency:
-        flags.append("currency_not_found")
+    if "currency" not in skip_fields:
+        m = re.search(CURRENCY_PATTERN, md, re.IGNORECASE)
+        if m:
+            currency = m.group(1).upper()
+        else:
+            for symbol, code in CURRENCY_SYMBOL_MAP.items():
+                if symbol in md:
+                    currency = code
+                    break
+        if not currency:
+            flags.append("currency_not_found")
 
-    receiver = _first_match(patterns["receiver"], md)
-    if not receiver:
-        for line in md.splitlines():
-            ln = line.strip()
-            if ln and not ln.startswith("|") and not ln.startswith("#") \
-               and ln.upper() not in ("INVOICE", "BILL", "RECEIPT") and len(ln) > 3:
-                receiver = ln
-                break
+    receiver = ""
+    if "receiver" not in skip_fields:
+        receiver = _first_match(patterns["receiver"], md)
+        if not receiver:
+            for line in md.splitlines():
+                ln = line.strip()
+                if ln and not ln.startswith("|") and not ln.startswith("#") \
+                   and ln.upper() not in ("INVOICE", "BILL", "RECEIPT") and len(ln) > 3:
+                    receiver = ln
+                    break
 
-    iban_raw = _first_match(patterns["iban"], md)
-    iban = _clean_iban(iban_raw) if iban_raw else ""
+    iban = ""
+    if "iban" not in skip_fields:
+        iban_raw = _first_match(patterns["iban"], md)
+        iban = _clean_iban(iban_raw) if iban_raw else ""
     dev_mode_iban = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     if iban and not _validate_iban_checksum(iban):
         if dev_mode_iban:
@@ -271,15 +283,23 @@ def extract_fields(md: str, filename: str) -> dict:
             flags.append("iban_invalid_checksum")
             iban = ""
 
-    bic = _first_match(patterns["bic"], md)
-    # LEGACY: bankgiro/plusgiro removed — always empty for DB compatibility
+    bic = ""
+    if "bic" not in skip_fields:
+        bic = _first_match(patterns["bic"], md)
+
     bankgiro = ""
     plusgiro = ""
-    due_date_raw = _first_match(patterns["due_date"], md)
-    due_date, due_date_defaulted = _generate_due_date(md, due_date_raw)
 
-    reference = _first_match(patterns["reference"], md)
-    reference = re.sub(r"\s+", "", reference)
+    due_date = ""
+    due_date_defaulted = False
+    if "due_date" not in skip_fields:
+        due_date_raw = _first_match(patterns["due_date"], md)
+        due_date, due_date_defaulted = _generate_due_date(md, due_date_raw)
+
+    reference = ""
+    if "reference" not in skip_fields:
+        reference = _first_match(patterns["reference"], md)
+        reference = re.sub(r"\s+", "", reference)
 
     dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
@@ -308,7 +328,7 @@ def extract_fields(md: str, filename: str) -> dict:
     seen = set()
     deduped = [f for f in flags if not (f in seen or seen.add(f))]
 
-    has_error = any(f in ERROR_FLAGS or f.startswith("llm_fallback_failed") for f in deduped)
+    has_error = any(f in ERROR_FLAGS for f in deduped)
 
     return {
         "invoice_id": invoice_id,

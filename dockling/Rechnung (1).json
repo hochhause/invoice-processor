@@ -1,0 +1,20 @@
+{
+  "invoice_id": "3075",
+  "receiver": "<!-- image -->",
+  "iban": "",
+  "bic": "",
+  "bankgiro": "",
+  "plusgiro": "",
+  "amount": "0.00",
+  "currency": "CHF",
+  "due_date": "30.06.2026",
+  "reference": "",
+  "needs_review": "YES",
+  "review_reasons": "reference_not_found; due_date_defaulted; no_payment_method",
+  "flags": [
+    "reference_not_found",
+    "due_date_defaulted",
+    "no_payment_method"
+  ],
+  "ocr_method": "docling"
+}
