@@ -51,7 +51,7 @@ CHF
 Due Date: 01/06/2026
 order no: ORD-999
 """
-    fields = extract_fields(SAMPLE_MD, "test.pdf")
+    fields = extract_fields(SAMPLE_MD, "test.pdf", check_whitelist=False)
     check("T3a-invoice-id", fields.get("invoice_id") == "INV-TEST001",
           f"Expected INV-TEST001, got {fields.get('invoice_id')}")
     check("T3b-amount", fields.get("amount") == "1234.56",

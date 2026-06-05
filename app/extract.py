@@ -47,9 +47,21 @@ def _clean_amount(s):
 
 
 def _clean_iban(raw):
+    # Remove all spaces first
     raw = re.sub(r"\s", "", raw)
+    # Match valid IBAN: CC + 2 check digits + 11-30 alphanumeric (total 15-34 chars, typically 22)
+    # Use non-greedy match to stop at first non-IBAN character
     m = re.match(r"([A-Z]{2}\d{2}[A-Z0-9]{11,30})", raw)
-    return m.group(1) if m else raw
+    if not m:
+        return ""
+    iban = m.group(1)
+    # Valid IBANs are 15-34 chars; if we got more, it's likely captured garbage
+    return iban if 15 <= len(iban) <= 34 else ""
+
+
+def _clean_bic(raw):
+    """Remove spaces from BIC code. E.g. 'FUIB UA 2X' → 'FRIBUAA2X'"""
+    return re.sub(r"\s", "", raw.upper()) if raw else ""
 
 
 def _validate_iban_checksum(iban: str) -> bool:
@@ -156,18 +168,29 @@ DEFAULT_PATTERNS = {
         r"\|\s*\|\s*Total\s*([\d,\.]+)\s*\|",
         r"\bTotal\b\s+([\d,\.]+)\s",
         r"\bTotal\b[^\d\n]*([\d,\.]+)",
+        # Betrag pattern (German) with optional EUR/CHF label above/below
+        r"(?:Währung|Currency)?\s*(?:EUR|CHF|USD)?\s*Betrag[:\s]+([\d\s,\.]+)",
+        r"Betrag[:\s]+([\d\s,\.]+)",
+        # Amount after EUR/CHF label on same or next line
+        r"(?:EUR|CHF|USD)\s*[\n\s]+([\d\s,\.]+)",
+        # Standalone currency followed by amount
+        r"\b(?:EUR|CHF|USD|GBP)\b[^\d\n]*([\d\s,\.]+)",
     ],
     "receiver": [
         r"Beneficiary\s+Name[:\s]+(.+)",
         r"BILL\s+FROM\s*\|\s*BILL\s+TO[^\n]*\n\|[-\s\|]+\n\|\s*([^\|]+?)\s*\|",
     ],
     "iban": [
-        r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9]{11,30})",
+        r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,})",
         r"IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,})",
-        r"\b([A-Z]{2}\d{2}[A-Z0-9]{11,30})\b",
+        # Generic IBAN pattern: match country code + check digits + alphanumeric/spaces
+        # Stops at first non-IBAN character (like transition to letters for text)
+        r"\b([A-Z]{2}\d{2}(?:[A-Z0-9\s]){11,30}?)(?:[a-z]|$|\s[A-Z]{2,})",
     ],
     "bic": [
         r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
+        # BIC with optional spaces inside: "FUIB UA 2X" → "FRIBUAA2X"
+        r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{4,6}\s*[A-Z0-9]{2,4}\s*[A-Z0-9]{0,3})",
     ],
     # LEGACY: Bankgiro/Plusgiro are Swedish-only payment methods, no longer extracted.
     # "bankgiro": [r"Bankgiro[:\s]*([\d\-]+)"],
@@ -179,6 +202,9 @@ DEFAULT_PATTERNS = {
         r"\|\s*[Zz]ahlbar\s+bis\s*:?\s*\|\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
         # Inline with German month name: zahlbar bis: 5. Dezember 2025
         r"[Zz]ahlbar\s+bis\s*:?\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
+        # "bis zum" pattern: bis zum 30.04.2026 or bis zum 30/04/2026
+        r"bis\s+zum\s+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
+        r"bis\s+zum\s+(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
         # Fälligkeitsdatum table: | Fälligkeitsdatum | 10/13/2024 |
         r"\|\s*F[äa]lligkeitsdatum\s*\|\s*([\d]{1,2}[\/\.][\d]{1,2}[\/\.][\d]{4})",
         # English
@@ -303,7 +329,8 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
 
     bic = ""
     if "bic" not in skip_fields:
-        bic = _first_match(patterns["bic"], md)
+        bic_raw = _first_match(patterns["bic"], md)
+        bic = _clean_bic(bic_raw) if bic_raw else ""
 
     bankgiro = ""
     plusgiro = ""

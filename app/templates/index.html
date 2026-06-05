@@ -359,6 +359,9 @@ function rowActions(job) {
   if (job.status === 'done' || job.status === 'error') {
     html += `<button class="btn-icon" title="Review &amp; edit" onclick="openModal('${job.id}')">✎</button> `;
   }
+  if (job.status === 'done') {
+    html += `<button class="btn-icon" title="Queue for AI detection" onclick="queueForAI('${job.id}')">🤖</button> `;
+  }
   if (job.status === 'error') {
     html += `<button class="btn-icon" title="Retry" onclick="retryJob('${job.id}')">↺</button> `;
   }
@@ -489,6 +492,26 @@ async function _apiFetch(url, opts = {}) {
 async function retryJob(id) {
   await _apiFetch(`/process/${id}`, { method: 'POST' });
   refreshJobs();
+}
+
+async function queueForAI(id) {
+  if (!confirm('Extract missing fields with AI?')) return;
+  try {
+    const res = await _apiFetch(`/api/retry-ai/${id}`, { method: 'POST' });
+    const {updated, status, error} = await res.json();
+    if (error) {
+      alert(`Error: ${error}`);
+    } else if (Object.keys(updated).length > 0) {
+      alert(`✓ Updated fields: ${Object.keys(updated).join(', ')}`);
+      refreshJobs();
+    } else if (status === 'all_fields_present') {
+      alert('All mandatory fields are already present.');
+    } else {
+      alert('No additional fields could be extracted.');
+    }
+  } catch (e) {
+    alert(`Failed: ${e.message}`);
+  }
 }
 
 async function retryAll() {
