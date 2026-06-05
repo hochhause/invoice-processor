@@ -5,13 +5,14 @@ Intelligent invoice extraction, validation, and export system for mass payment p
 ## What It Does
 
 1. **PDF Upload & OCR** — Accepts PDF invoices and extracts text via `Docling` (local ML-based layout analysis + OCR)
-2. **QR Code Extraction** — Decodes Swiss QR codes first (if present) to lock known payment fields
+2. **QR Code Extraction** — Decodes Swiss QR-bill (SPC) codes first to lock known payment fields
 3. **Field Extraction** — Regex-based pattern matching for invoice ID, amount, currency, IBAN, BIC, due date, and reference
-4. **Web Review Interface** — Modal-based editing and validation of extracted fields
-5. **Multi-Format Export**:
-   - **ISO 20022 pain.001.001.03 XML** — Pain format compatible with BLKB, Raiffeisen, UBS, BKB ebanking portals
-   - **CSV** — Spreadsheet export with all payment fields
-6. **Dev Autofill** — Currency-aware synthetic test data generation (CHF/EUR with valid IBANs and BICs)
+4. **Field Confidence** — Every extracted field is rated `SUCCESSFUL / SUSPICIOUS / EMPTY` (color-coded in review modal)
+5. **AI Fallback** — Haiku re-reads the invoice markdown for any EMPTY or SUSPICIOUS field on demand
+6. **Web Review Interface** — Modal-based editing; field borders colored green/amber/red by confidence
+7. **Multi-Format Export**:
+   - **ISO 20022 pain.001.001.03 XML** — compatible with BLKB, Raiffeisen, UBS, BKB, PostFinance
+   - **CSV** — spreadsheet export with all payment fields
 
 ## Who Made It
 
@@ -22,55 +23,55 @@ Intelligent invoice extraction, validation, and export system for mass payment p
 ### Prerequisites
 
 - **Docker** or **Podman** (5.0+)
-- **Memory**: ≥2GB RAM (for Docling model cache)
+- **Memory**: ≥2GB RAM (Docling model cache)
 
 ### Quick Start
 
 ```bash
-# Clone the repo
 git clone <repo-url>
 cd invoice-processor
 
-# Create .env (or copy from .env.example)
 cp .env.example .env
+# Edit .env — fill in DEBTOR details and optionally ANTHROPIC_API_KEY
 
-# Edit .env to configure:
-# - DEBTOR company details (for pain.001 generation)
-# - DEV_MODE (for startup tests + auto-fill)
-
-# Build and run with Podman
 podman compose up --build -d
-
-# Server runs on http://localhost:8080
+# Server: http://localhost:8080
 ```
 
 ### Environment Variables
 
 ```env
-# Pain.001 Sender (Debtor) — Your company details
+# ── Pain.001 Sender (required for XML export) ─────────────────────────────
 DEBTOR_NAME=Your Company AG
-DEBTOR_IBAN=CH56...  # Your company's IBAN
-DEBTOR_BIC=BLKBCH22  # Your bank's BIC
+DEBTOR_IBAN=CH56...
+DEBTOR_BIC=BLKBCH22
 
-# Development mode
-DEV_MODE=true        # Enables startup tests + synthetic data fill buttons
+# ── AI Field Fallback (optional) ──────────────────────────────────────────
+# Enables "Retry with AI" button in review modal.
+# Haiku re-reads invoice markdown for EMPTY/SUSPICIOUS fields.
+ANTHROPIC_API_KEY=sk-ant-...
+ENABLE_LLM_FALLBACK=true
+
+# ── Development ────────────────────────────────────────────────────────────
+DEV_MODE=true          # Startup tests + synthetic data fill buttons
+CSV_RULE_SET=default   # Bank-specific regex override (rules/<name>.py)
+
+# ── Debug (optional) ──────────────────────────────────────────────────────
+DEBUG_MD_DIR=/app/data/debug-md   # Save Docling markdown to disk for inspection
+# DEBUG_QR_DIR=/app/data/debug-qr # Save QR scan images for inspection
 ```
 
 ### Volume Configuration
 
-The application uses a named Docker/Podman volume to avoid OneDrive sync conflicts:
+Named volume avoids OneDrive sync conflicts:
 
 ```yaml
 volumes:
-  invoice_processor_data:    # Auto-managed by Docker/Podman
-    # Stores: uploads/ and invoices.db
+  invoice_processor_data:   # Stores uploads/ + invoices.db
 ```
 
-To locate the volume on your system:
-
 ```bash
-podman volume ls | grep invoice_processor_data
-podman volume inspect invoice_processor_data
+podman volume inspect invoice_processor_data  # Locate on disk
 ```
 
 ## Technical Architecture
@@ -80,231 +81,230 @@ podman volume inspect invoice_processor_data
 ```
 PDF Upload
     ↓
-QR Code Extraction (qr_swiss.py)
+QR Code Extraction (qr_swiss.py)         → locks fields: IBAN, BIC, receiver, amount, currency, reference
     ↓
-Docling (text extraction + layout analysis)
+Docling (pipeline.py)                    → markdown text
     ↓
-extract_fields (regex patterns, skip fields locked by QR)
+extract_fields (extract.py)              → fields + SUCCESSFUL/SUSPICIOUS/EMPTY status per field
     ↓
-SQLite DB (invoices.db)
+_merge_qr (pipeline.py)                  → QR fields forced to SUCCESSFUL
     ↓
-Web Review Modal (manual validation)
+SQLite DB (invoices.db)                  → field_statuses stored as JSON
+    ↓
+Web Review Modal                         → inputs colored by status; AI button if any EMPTY/SUSPICIOUS
+    ↓
+[Optional] Retry with AI (Haiku)         → re-reads markdown for EMPTY+SUSPICIOUS fields only
     ↓
 Export: pain.001 XML or CSV
 ```
 
+### Field Confidence Status
+
+Every extracted field carries one of three statuses, stored in `field_statuses` (JSON column):
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| `SUCCESSFUL` | 🟢 Green | Value found and passes sanity checks |
+| `SUSPICIOUS` | 🟡 Amber | Value found but looks wrong |
+| `EMPTY` | 🔴 Red | Value not found |
+
+**Suspicious detection rules:**
+
+| Field | Suspicious if... |
+|-------|-----------------|
+| `receiver` | Contains HTML tags / `<!-- image -->` (OCR artifact) |
+| `invoice_id` | Length < 6, or alphanumeric ratio < 50% |
+| `amount` | Numeric value < 100.00 |
+| `iban` | Body after country code has >4 alpha chars, or MOD-97 fails |
+| `due_date` | Defaulted to end-of-month (no date found in text) |
+
+QR-bill fields are **always** `SUCCESSFUL` — they override any suspicious flags.
+
+**AI retry**: "Retry with AI" button appears when any field is EMPTY or SUSPICIOUS. Haiku re-reads the markdown for those fields only. SUCCESSFUL fields are never re-sent to AI.
+
 ### Key Components
 
-#### 1. **PDF → Markdown** (`app/pipeline.py`)
+#### 1. PDF → Markdown (`app/pipeline.py`)
 
-Uses [Docling](https://github.com/DS4SD/docling) for ML-based document layout analysis and text extraction.
+Uses [Docling](https://github.com/DS4SD/docling) for ML-based document layout analysis and OCR. Handles scanned + native PDFs. Returns clean markdown for regex matching.
 
-```
-- Handles scanned PDFs (image-based) via built-in OCR
-- Extracts tables, headers, structured text with layout awareness
-- Returns clean markdown for regex pattern matching
-- Runs locally (no external API required)
-```
+#### 2. Field Extraction (`app/extract.py`)
 
-#### 2. **Field Extraction** (`app/extract.py`)
+Regex pattern matching with per-field confidence assessment:
 
-Regex-based pattern matching with bank-specific rule sets (configurable via `CSV_RULE_SET`):
+- **Invoice ID**: `INVOICE NUMBER | INV-001`, `invoice no: INV-001`, `Rechnungsnummer`
+- **Amount**: Handles Swiss comma/period decimal formats; normalized to `X.XX`
+- **Currency**: CHF/EUR/USD/GBP codes and symbols (`€`, `£`, `$`)
+- **IBAN**: Extracts + validates MOD-97 checksum (ISO 13616); no external deps
+- **BIC**: 8 or 11-char SWIFT code pattern
+- **Due Date**: DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD, German month names (`5. Oktober 2025`)
+- **Reference**: OCR-nr, Referenz, order number patterns
 
-- **Invoice ID**: "INVOICE NUMBER | INV-001", "invoice no: INV-001"
-- **Amount**: Handles commas/periods as thousands/decimals
-- **Currency**: Detects CHF/EUR/USD/GBP symbols and codes
-- **IBAN**: Extracts country code + alphanumeric, validates MOD-97 checksum
-- **BIC**: Validates 8 or 11-character SWIFT codes
-- **Due Date**: Parses DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD formats
+Bank-specific pattern overrides via `rules/<bank_name>.py` + `CSV_RULE_SET` env var.
 
-**Validation**:
-- IBAN MOD-97 checksum (ISO 13616) — no external dependencies
-- BIC regex pattern enforcement (A-Z bank code + country + location)
+#### 3. Swiss QR Code Extraction (`app/qr_swiss.py`)
 
-#### 3. **Swiss QR Code Extraction** (`app/qr_swiss.py`)
+Decodes ISO 20022 SPC QR codes (Swiss QR-bill / QR-Rechnung):
 
-Decodes ISO 20022 SPC (Structured Post Code) QR codes from invoices.
+- Multi-DPI scan strategy: 150/300/400 DPI full page + bottom-half crop
+- Libraries: `pyzbar` (primary) + `zxing-cpp` (fallback)
+- QR-filled fields override regex results and are always `SUCCESSFUL`
 
-- Extracts: IBAN, receiver, amount, currency, reference (if present)
-- Fields locked by QR are skipped in regex pattern matching (prevents contradictions)
-- Logs `ocr_method = "docling+qr"` for invoices with QR
+#### 4. AI Field Fallback (`app/extract.py:llm_extract_field`, `app/config.py`)
 
-#### 4. **ISO 20022 pain.001 Export** (`app/xml_export.py`)
+Tier 1 fallback using Anthropic Haiku:
 
-**Standard**: [ISO 20022 pain.001.001.03](https://www.iso20022.org/)
+- Triggered manually via "Retry with AI" button in review modal
+- Only processes fields with status `EMPTY` or `SUSPICIOUS`
+- Requires: `ANTHROPIC_API_KEY` + `ENABLE_LLM_FALLBACK=true` in `.env`
+- Health check runs at startup (`config.py:llm_available()`) — result cached
+- After AI update: field status promoted to `SUCCESSFUL`
 
-Generates XML compatible with Swiss/EU banking:
+#### 5. ISO 20022 pain.001 Export (`app/xml_export.py`)
 
-- **Domestic CHF** (SIC): `SvcLvl/Cd = NURG`
-- **SEPA EUR** (euroSIC): `SvcLvl/Cd = SEPA`
-- **Cross-border** (GBP, USD, etc.): `SvcLvl/Cd = NURG` + `LclInstrm/Cd = SWIFT`
+**Standard**: ISO 20022 pain.001.001.03
 
-Banks accepting pain.001 format:
-- ✅ UBS
-- ✅ Raiffeisen
-- ✅ BLKB (Basellandschaftliche Kantonalbank)
-- ✅ BKB (Basler Kantonalbank)
-- ✅ PostFinance
-- ✅ Most EU SEPA banks
+| Currency | Service Level | Instrument |
+|----------|--------------|------------|
+| CHF (domestic) | `NURG` | — |
+| EUR (SEPA) | `SEPA` | — |
+| Other | `NURG` | `SWIFT` |
 
-#### 5. **Web Dashboard** (`app/main.py`, `app/templates/index.html`)
+Compatible banks: UBS, Raiffeisen, BLKB, BKB, PostFinance, most EU SEPA banks.
 
-**Features**:
-- Drag-drop PDF upload
-- Real-time job status (processing/done/error)
-- Modal-based field review and editing
-- Dark mode toggle (persisted in localStorage)
-- Bulk operations: retry all, run AI on all, dev-fill all, clear all
-- Download buttons: pain.001 XML, CSV export
+#### 6. Web Dashboard (`app/main.py`, `app/templates/index.html`)
 
-**API Endpoints**:
-- `POST /api/upload` — File upload
-- `GET /api/jobs` — List all invoices
-- `POST /api/review/{id}` — Update invoice fields
-- `DELETE /api/jobs/{id}` — Delete invoice
-- `DELETE /api/clear-all` — Delete all
-- `GET /download/xml` — Export pain.001
-- `GET /download/csv` — Export CSV
+- Drag-drop PDF upload with progress bar
+- Real-time job status polling (2s interval while processing)
+- Review modal: field inputs colored green/amber/red by confidence status
+- AI button shown per-job when EMPTY or SUSPICIOUS fields exist
+- Bulk ops: retry errors, clear all, dev-fill all
+- Dark mode (persisted in localStorage)
 
-#### 6. **Startup Tests** (`app/tests.py`)
+**API Endpoints:**
 
-Runs automatically in `DEV_MODE` on container startup:
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/upload` | Upload PDF(s) |
+| `GET` | `/api/jobs` | List all jobs (includes `field_statuses`) |
+| `POST` | `/api/review/{id}` | Save reviewed fields |
+| `POST` | `/api/retry-ai/{id}` | Re-extract EMPTY+SUSPICIOUS fields with Haiku |
+| `GET` | `/api/llm-available` | Check if AI fallback is configured |
+| `DELETE` | `/jobs/{id}` | Delete job + file |
+| `DELETE` | `/api/clear-all` | Delete all jobs |
+| `GET` | `/download/xml` | Export pain.001 XML |
+| `GET` | `/download/csv` | Export CSV |
 
-- **T1**: IBAN MOD-97 checksum validation
-- **T2**: BIC regex pattern validation
-- **T3**: extract_fields structure validation
-- **T4**: pain.001 XML well-formedness + element presence
-- **T5**: Multi-currency grouping (CHF/EUR → separate PmtInf blocks)
-- **T6**: Skip jobs missing IBAN/BIC (NbOfTxs=0)
+#### 7. Startup Tests (`app/tests.py`)
 
-Fails the container startup if tests don't pass (safety check).
+Runs in `DEV_MODE` on container startup; blocks start if any fail:
 
-### Tools & Standards
-
-#### Extraction & Processing
-
-| Tool | Purpose | Link |
-|------|---------|------|
-| **Docling** | PDF → Markdown (ML layout analysis + OCR) | [DS4SD/docling](https://github.com/DS4SD/docling) |
-| **fastapi** | Web framework + REST API | [FastAPI](https://fastapi.tiangolo.com) |
-| **pymupdf** | PDF page rendering for QR extraction | [PyMuPDF](https://pymupdf.readthedocs.io) |
-| **pyzbar** | QR code decoding | [pyzbar](https://github.com/NaturalHistoryMuseum/pyzbar) |
-
-#### Standards & Formats
-
-| Standard | Purpose | Link |
-|----------|---------|------|
-| **ISO 20022 pain.001.001.03** | Payment initiation XML format | [ISO 20022 Registry](https://www.iso20022.org/) |
-| **IBAN (ISO 13616)** | International bank account number + MOD-97 checksum | [Wikipedia IBAN](https://en.wikipedia.org/wiki/International_Bank_Account_Number) |
-| **SWIFT/BIC** | Bank identifier code (8-11 chars) | [SWIFT](https://www.swift.com) |
-| **SIC/euroSIC** | Swiss banking standards for domestic/SEPA | [SIX](https://www.six-group.com) |
-
-#### Development Tools
-
-| Tool | Purpose | Link |
-|------|---------|------|
-| **RTK** | Token-optimized CLI (saves 60-90% on dev operations) | [RTK](https://github.com/reachingforthejack/rtk) |
-| **distill** | Semantic compression for command-line output | [distill](https://github.com/anthropics/distill) |
-| **pytest** | Unit testing framework | [pytest](https://pytest.org) |
-| **podman** | OCI container runtime (Docker-compatible) | [Podman](https://podman.io) |
+- **T1**: IBAN MOD-97 checksum (valid CH/DE, invalid fake)
+- **T2**: BIC regex (8/11-char, various formats)
+- **T3**: `extract_fields` output structure
+- **T4**: pain.001 XML well-formedness
+- **T5**: Multi-currency grouping (CHF/EUR → separate PmtInf)
+- **T6**: Skip jobs with missing IBAN (NbOfTxs=0)
 
 ### Database Schema
 
-**invoices.db** (SQLite):
+**invoices.db** (SQLite, named volume):
 
 ```sql
 CREATE TABLE jobs (
-  id TEXT PRIMARY KEY,
-  filename TEXT,
-  status TEXT (processing|done|error),
-  invoice_id TEXT,
-  amount TEXT,
-  currency TEXT,
-  receiver TEXT,
-  iban TEXT,
-  bic TEXT,
-  bankgiro TEXT,  -- Legacy (always "")
-  plusgiro TEXT,  -- Legacy (always "")
-  due_date TEXT,
-  reference TEXT,
-  needs_review TEXT (YES|NO),
-  review_reasons TEXT,
-  ocr_method TEXT (docling|docling+qr),
-  error_msg TEXT,
-  created_at TEXT,
-  updated_at TEXT
+  id              TEXT PRIMARY KEY,
+  filename        TEXT,
+  status          TEXT,          -- pending|processing|done|error
+  invoice_id      TEXT,
+  amount          TEXT,
+  currency        TEXT,
+  receiver        TEXT,
+  iban            TEXT,
+  bic             TEXT,
+  bankgiro        TEXT,          -- legacy, always ""
+  plusgiro        TEXT,          -- legacy, always ""
+  due_date        TEXT,
+  reference       TEXT,
+  needs_review    TEXT,          -- YES|NO
+  review_reasons  TEXT,          -- semicolon-separated flag list
+  ocr_method      TEXT,          -- docling|docling+qr|docling+llm
+  field_statuses  TEXT,          -- JSON: {"invoice_id":"SUCCESSFUL","amount":"EMPTY",...}
+  error_msg       TEXT,
+  created_at      TEXT,
+  updated_at      TEXT
 );
 ```
 
+### Tools & Standards
+
+| Tool / Standard | Purpose |
+|----------------|---------|
+| [Docling](https://github.com/DS4SD/docling) | PDF → Markdown (ML OCR) |
+| [FastAPI](https://fastapi.tiangolo.com) | REST API + web framework |
+| [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-python) | Haiku AI field fallback |
+| [PyMuPDF](https://pymupdf.readthedocs.io) | PDF page rendering for QR |
+| [pyzbar](https://github.com/NaturalHistoryMuseum/pyzbar) | QR code decoding |
+| ISO 20022 pain.001.001.03 | Payment initiation XML |
+| IBAN ISO 13616 | MOD-97 checksum validation |
+
 ## Development
 
-### Running Locally (Without Docker)
+### Running Locally (Without Podman)
 
 ```bash
-# Install Python 3.11+
 python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+venv\Scripts\activate   # Windows
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Run startup tests
-python -m pytest app/tests.py -v
+# Set env vars (no auto-.env loading outside container)
+$env:ANTHROPIC_API_KEY="sk-ant-..."
+$env:ENABLE_LLM_FALLBACK="true"
+$env:DEV_MODE="true"
+$env:DEBUG_MD_DIR="./data/debug-md"
 
-# Run server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
 ### Adding Custom Bank Rules
 
-Create `app/rules/<bank_name>.py`:
+Create `rules/<bank_name>.py`:
 
 ```python
 PATTERNS = {
     "invoice_id": [r"Invoice #(\w+)"],
     "amount": [r"Total.*?([\d,\.]+)"],
-    # Override defaults for this bank
+    # Only override keys that differ from defaults
 }
 ```
 
-Set `CSV_RULE_SET=<bank_name>` in `.env` to use.
+Set `CSV_RULE_SET=<bank_name>` in `.env`.
 
-### Building with Podman
+### Container Operations
 
 ```bash
-# Build
-podman compose build
-
-# Run with startup tests
-podman compose up -d
-
-# View logs
-podman compose logs -f app
+podman compose up --build -d   # Build + start
+podman compose logs -f app     # Follow logs
+podman compose restart app     # Restart (reload env vars)
+podman volume inspect invoice_processor_data  # Find data dir
 ```
 
 ## Troubleshooting
 
+### AI Button Not Appearing
+
+1. Check `ANTHROPIC_API_KEY` starts with `sk-ant-` in `.env`
+2. Check `ENABLE_LLM_FALLBACK=true` in `.env`
+3. Check container logs for `[config] LLM health check passed ✓`
+4. If missing: `anthropic` package not installed — rebuild with `podman compose up --build`
+
 ### Docling Model Download
 
-On first run, Docling downloads ~500MB of models. This happens during container build (via the pre-bake RUN step in Dockerfile). Subsequent runs use cached models.
-
-If you see model download warnings during runtime, this is normal — models are cached after first download.
+First run downloads ~500MB of models during `podman compose up --build`. Subsequent runs use cached models. Download warnings at runtime are normal.
 
 ### OneDrive Sync Issues
 
-The app uses a named Docker/Podman volume (`invoice_processor_data`) to avoid conflicts with OneDrive:
-
-- Uploads and database are stored in the volume, NOT in the project directory
-- This prevents file-lock conflicts during sync
-
-### Volume Permissions (Linux/Mac)
-
-If you see permission errors on volume access:
-
-```bash
-# Run container with current user UID
-podman compose exec app chown -R $(id -u):$(id -g) /app/data
-```
+Named volume (`invoice_processor_data`) stores uploads + DB outside the project directory — no sync conflicts.
 
 ## License
 
@@ -312,4 +312,4 @@ Proprietary — Lyfegen HealthTech AG
 
 ## Contact
 
-For support or questions, contact: sasha.bieri@lyfegen.com
+sasha.bieri@lyfegen.com

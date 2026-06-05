@@ -357,6 +357,32 @@ def upsert_job(job_id: str, **kwargs):
 
 ---
 
+## Field Confidence Status System
+
+### Three-State Field Status: SUCCESSFUL / SUSPICIOUS / EMPTY
+
+**Decision:** Every extracted field carries a `field_statuses` confidence level: `SUCCESSFUL`, `SUSPICIOUS`, or `EMPTY`.
+
+**Location:** `app/extract.py:FIELD_STATUS_*`, `app/db.py` (column `field_statuses TEXT`), `app/pipeline.py:_merge_qr()`
+
+**Reason:** Binary "found/missing" was insufficient — OCR can extract plausible-looking garbage (`<!-- image -->` as receiver, 2-char invoice IDs). A three-state model lets the UI highlight suspicious values in amber, trigger AI re-extraction only where needed (EMPTY+SUSPICIOUS), and never re-run AI on already-correct QR-filled fields.
+
+**Suspicious rules:**
+- `receiver`: HTML artifact (`<!-- image -->`, tags) → cleared, SUSPICIOUS
+- `invoice_id`: len < 6, or alphanumeric ratio < 0.5
+- `amount`: float value < 100.0
+- `iban`: body has >4 alpha chars OR MOD-97 fails
+- `due_date`: defaulted to end-of-month
+- QR-filled: always SUCCESSFUL, clears any prior suspicious flags
+
+**Storage:** `field_statuses` stored as JSON string in SQLite; parsed back to dict by `/api/jobs`. Migration: `ALTER TABLE jobs ADD COLUMN field_statuses TEXT DEFAULT '{}'`.
+
+**AI retry logic:** `/api/retry-ai/{id}` sends EMPTY + SUSPICIOUS fields to Haiku. SUCCESSFUL fields skipped. After AI updates, field status set to SUCCESSFUL.
+
+**UI:** Modal form inputs colored green (SUCCESSFUL), amber (SUSPICIOUS), red (EMPTY). AI button shown if any field is EMPTY or SUSPICIOUS.
+
+---
+
 ## Notable TODOs / Gaps
 
 **[UNCLEAR]** `app/test_ollama.py` — Purpose and integration point not documented in README or main code. Likely a manual test utility.

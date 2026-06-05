@@ -31,7 +31,9 @@ def _save_debug_md(job_id: str, filename: str, md_content: str):
         return
     debug_dir = Path(DEBUG_MD_DIR)
     debug_dir.mkdir(parents=True, exist_ok=True)
-    base_name = Path(filename).stem
+    # filename may be full upload path like "UUID_original.pdf" — strip UUID prefix
+    stem = Path(filename).stem
+    base_name = stem.split("_", 1)[1] if "_" in stem else stem
     md_file = debug_dir / f"{job_id}_{base_name}.md"
     md_file.write_text(md_content, encoding="utf-8")
 
@@ -46,22 +48,29 @@ def _delete_debug_md(job_id: str, upload_dir: Path):
 
 
 def _merge_qr(fields: dict, qr: dict) -> dict:
-    """Merge QR-extracted fields with regex-extracted fields. QR takes precedence."""
-    from extract import ERROR_FLAGS
+    """Merge QR-extracted fields with regex-extracted fields. QR takes precedence.
+    QR-filled fields are always SUCCESSFUL regardless of content."""
+    from extract import ERROR_FLAGS, FIELD_STATUS_SUCCESSFUL
     qr_filled = set()
     for key in ("iban", "bic", "receiver", "amount", "currency", "reference"):
         if qr.get(key):
             fields[key] = qr[key]
             qr_filled.add(key)
 
+    # QR-filled fields are always SUCCESSFUL — never suspicious
+    statuses = fields.get("field_statuses", {})
+    for key in qr_filled:
+        statuses[key] = FIELD_STATUS_SUCCESSFUL
+    fields["field_statuses"] = statuses
+
     merged = qr.get("flags", []) + fields.get("flags", [])
     seen = set()
     merged = [f for f in merged if not (f in seen or seen.add(f))]
 
-    # Remove "field_not_found" flags for fields that QR provided
+    # Remove "field_not_found" and "*_suspicious" flags for fields that QR provided
     if qr_filled:
-        not_found_flags = {f"{k}_not_found" for k in qr_filled}
-        merged = [f for f in merged if f not in not_found_flags]
+        cleared_flags = {f"{k}_not_found" for k in qr_filled} | {f"{k}_suspicious" for k in qr_filled}
+        merged = [f for f in merged if f not in cleared_flags]
 
     if qr.get("iban") and "no_payment_method" in merged:
         merged = [f for f in merged if f != "no_payment_method"]
@@ -112,17 +121,30 @@ def run(pdf_path: str) -> dict:
         flags = fields.get("flags", [])
         fields["review_reasons"] = "; ".join(flags)
 
-    # ── Step 5: Auto-whitelist valid fields ───────────────────────────────────
+    # ── Step 5: Vendor match — fill receiver/iban/invoice_id from known vendors ──
+    _matched_vendor_id = None
     try:
-        import db
-        # Add receiver to whitelist if found and not suspicious
-        if fields.get("receiver") and "receiver_suspicious" not in fields.get("flags", []):
-            db.add_to_whitelist("receiver", fields["receiver"], filename)
-        # Add IBAN to whitelist if found and not suspicious
-        if fields.get("iban") and "iban_suspicious" not in fields.get("flags", []):
-            db.add_to_whitelist("iban", fields["iban"], filename)
+        from vendors import match_vendor_fields
+        vendor_overrides = match_vendor_fields(fields, md)
+        if vendor_overrides:
+            _matched_vendor_id = vendor_overrides.pop("_matched_vendor_id", None)
+            for k, v in vendor_overrides.items():
+                fields[k] = v
+            # QR-locked fields take precedence — restore them if vendor tried to overwrite
+            for k in qr_locked:
+                if qr and qr.get(k):
+                    fields[k] = qr[k]
+            # Mark vendor-filled fields SUCCESSFUL
+            statuses = fields.get("field_statuses", {})
+            for k in vendor_overrides:
+                statuses[k] = "SUCCESSFUL"
+            fields["field_statuses"] = statuses
+            print(f"[pipeline] Vendor match id={_matched_vendor_id} overrides={list(vendor_overrides.keys())}", flush=True)
     except Exception as e:
-        print(f"[pipeline] Whitelist update failed: {e}", file=sys.stderr, flush=True)
+        print(f"[pipeline] Vendor match failed: {e}", file=sys.stderr, flush=True)
+
+    # Store matched vendor id for main.py to persist invoice_id history
+    fields["_matched_vendor_id"] = _matched_vendor_id
 
     # ── Debug: save markdown if DEBUG_MD_DIR set ──────────────────────────────
     if DEBUG_MD_DIR:

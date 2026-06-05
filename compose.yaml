@@ -15,3 +15,4 @@ services:
 
 volumes:
   invoice_processor_data:
+    name: invoice_processor_data  # prevent compose project-name prefix

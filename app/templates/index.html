@@ -61,6 +61,9 @@
       <button class="btn btn-secondary" onclick="clearAllInvoices()" title="Delete all invoices">
         <span>🗑️</span> Clear all
       </button>
+      <button class="btn btn-secondary" onclick="openVendorsModal()" title="Manage known vendors">
+        Vendors <span id="vendor-count-badge" style="font-size:0.8em; opacity:0.7"></span>
+      </button>
       <button class="btn btn-secondary" onclick="toggleDevPanel()" title="Dev tools">
         <span>⚙️</span> Dev
       </button>
@@ -69,18 +72,51 @@
 
   <div id="dev-panel" class="dev-panel" style="display:none; margin-top:16px; padding:12px; background:#1a1a1a; border-radius:4px;">
     <div style="display:flex; gap:8px; margin-bottom:8px;">
-      <div>
-        <strong>LLM Status:</strong> <span id="llm-status">Checking...</span>
-      </div>
-      <div>
-        <strong>Whitelist:</strong> <span id="whitelist-count">-</span> items
-      </div>
+      <div><strong>LLM Status:</strong> <span id="llm-status">Checking...</span></div>
     </div>
-    <button class="btn btn-secondary" onclick="flushWhitelist()" title="Clear whitelist">
-      <span>🗑️</span> Flush whitelist
+    <button class="btn btn-secondary" onclick="flushVendors()" title="Clear all vendors">
+      <span>🗑️</span> Flush vendors
     </button>
   </div>
 </section>
+
+<!-- Vendors modal -->
+<div id="vendors-modal" class="modal-backdrop" style="display:none" onclick="if(event.target===this)closeVendorsModal()">
+  <div class="modal-container" style="max-width:720px">
+    <div class="modal-header">
+      <h2 class="modal-title">Known Vendors</h2>
+      <button class="modal-close" onclick="closeVendorsModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="opacity:0.6;font-size:0.85em;margin-bottom:12px">
+        When a document matches a vendor by receiver name or IBAN, both fields are filled and marked SUCCESSFUL.
+        Invoice IDs are tracked per vendor to detect the next sequential number.
+      </p>
+      <table id="vendors-table" style="width:100%;border-collapse:collapse;font-size:0.9em">
+        <thead>
+          <tr style="border-bottom:1px solid #333;text-align:left">
+            <th style="padding:6px 8px">Name</th>
+            <th style="padding:6px 8px">IBAN</th>
+            <th style="padding:6px 8px;text-align:center">Invoice IDs</th>
+            <th style="padding:6px 8px"></th>
+          </tr>
+        </thead>
+        <tbody id="vendors-tbody"></tbody>
+      </table>
+      <div style="margin-top:16px;display:flex;gap:8px;align-items:flex-end">
+        <div style="flex:1">
+          <label style="font-size:0.8em;opacity:0.7">Vendor name</label>
+          <input id="new-vendor-name" class="form-input" placeholder="Acme AG" style="width:100%">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:0.8em;opacity:0.7">IBAN</label>
+          <input id="new-vendor-iban" class="form-input" placeholder="CH56 0483 5012 3456 7800 9" style="width:100%">
+        </div>
+        <button class="btn btn-primary" onclick="addVendor()">Add</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Dashboard table -->
 <section class="table-section">
@@ -419,6 +455,15 @@ const FIELD_IDS = {
   bic: 'f-bic', reference: 'f-reference'
 };
 
+function applyFieldStatus(fieldId, status) {
+  const el = document.getElementById(fieldId);
+  if (!el) return;
+  el.classList.remove('field-successful', 'field-suspicious', 'field-empty');
+  if (status === 'SUCCESSFUL') el.classList.add('field-successful');
+  else if (status === 'SUSPICIOUS') el.classList.add('field-suspicious');
+  else el.classList.add('field-empty');
+}
+
 async function openModal(jobId) {
   const r = await fetch('/api/jobs');
   const jobs = await r.json();
@@ -443,16 +488,24 @@ async function openModal(jobId) {
     reasonsEl.style.display = 'none';
   }
 
+  const statuses = job.field_statuses || {};
   for (const f of FIELDS) {
-    document.getElementById(FIELD_IDS[f]).value = job[f] || '';
+    const el = document.getElementById(FIELD_IDS[f]);
+    if (el) el.value = job[f] || '';
+    applyFieldStatus(FIELD_IDS[f], statuses[f] || (job[f] ? 'SUCCESSFUL' : 'EMPTY'));
   }
 
-  // Show "Retry with AI" button only if LLM is available AND there are missing fields
-  const mandatoryFields = ['amount', 'currency', 'receiver', 'due_date', 'reference'];
-  const hasMissing = mandatoryFields.some(f => !job[f] || job[f].trim() === '');
+  // Show "Retry with AI" button if LLM available AND any field is EMPTY or SUSPICIOUS
   const btnRetryAi = document.getElementById('btn-retry-ai');
-  if (btnRetryAi && btnRetryAi.style.display !== 'none') {
-    btnRetryAi.style.display = hasMissing ? 'block' : 'none';
+  const hasNeedsAI = FIELDS.some(f => {
+    const st = statuses[f] || (job[f] ? 'SUCCESSFUL' : 'EMPTY');
+    return st === 'EMPTY' || st === 'SUSPICIOUS';
+  });
+  if (btnRetryAi) {
+    // Only show if LLM already confirmed available (set by initLLMButton)
+    if (btnRetryAi.dataset.llmReady === 'true') {
+      btnRetryAi.style.display = hasNeedsAI ? 'inline-flex' : 'none';
+    }
   }
 
   modal.showModal();
@@ -479,7 +532,7 @@ async function _apiFetch(url, opts = {}) {
   try {
     const r = await fetch(url, opts);
     if (!r.ok) {
-      const body = await r.text().catch(() => '');
+      const body = await r.clone().text().catch(() => '');
       console.error(`[invoice-processor] ${opts.method || 'GET'} ${url} → ${r.status}`, body);
     }
     return r;
@@ -690,7 +743,9 @@ async function initLLMButton() {
     const {available} = await res.json();
     const btnRetryAi = document.getElementById('btn-retry-ai');
     if (btnRetryAi) {
-      btnRetryAi.style.display = available ? 'block' : 'none';
+      btnRetryAi.dataset.llmReady = available ? 'true' : 'false';
+      // Hide by default; openModal controls visibility per-job
+      if (!available) btnRetryAi.style.display = 'none';
     }
   } catch (e) {
     console.warn('[LLM] Health check failed:', e);
@@ -756,32 +811,82 @@ async function updateDevPanel() {
     }
   }
 
-  // Check whitelist count
+  // Update vendor badge count
   try {
-    const res = await fetch('/api/whitelist');
-    const items = await res.json();
-    const countEl = document.getElementById('whitelist-count');
-    if (countEl) {
-      countEl.textContent = items.length;
-    }
-  } catch (e) {
-    const countEl = document.getElementById('whitelist-count');
-    if (countEl) {
-      countEl.textContent = '? (error)';
-    }
-  }
+    const res = await fetch('/api/vendors');
+    const vendors = await res.json();
+    const badge = document.getElementById('vendor-count-badge');
+    if (badge) badge.textContent = vendors.length ? `(${vendors.length})` : '';
+  } catch (_) {}
 }
 
-async function flushWhitelist() {
-  if (!confirm('Clear all whitelisted receivers and IBANs?')) return;
-
+async function flushVendors() {
+  if (!confirm('Delete all known vendors?')) return;
   try {
     await fetch('/api/whitelist', { method: 'DELETE' });
-    alert('✓ Whitelist cleared');
     updateDevPanel();
   } catch (e) {
     alert(`Error: ${e.message}`);
   }
+}
+
+// ── Vendors modal ─────────────────────────────────────────────────────────────
+async function openVendorsModal() {
+  document.getElementById('vendors-modal').style.display = 'flex';
+  await refreshVendors();
+}
+
+function closeVendorsModal() {
+  document.getElementById('vendors-modal').style.display = 'none';
+}
+
+async function refreshVendors() {
+  const res = await fetch('/api/vendors');
+  const vendors = await res.json();
+  const tbody = document.getElementById('vendors-tbody');
+  tbody.innerHTML = vendors.length ? vendors.map(v => {
+    const ids = Array.isArray(v.invoice_ids) ? v.invoice_ids : [];
+    const lastId = ids.length ? ids[ids.length - 1] : '—';
+    const title = ids.length > 1 ? ids.slice(-5).join('\n') : '';
+    return `<tr style="border-bottom:1px solid #222">
+      <td style="padding:6px 8px">${escHtml(v.name || '—')}</td>
+      <td style="padding:6px 8px;font-family:monospace;font-size:0.85em">${escHtml(v.iban || '—')}</td>
+      <td style="padding:6px 8px;text-align:center" title="${escHtml(title)}">
+        ${ids.length} ${ids.length ? `<span style="opacity:0.5;font-size:0.8em">(last: ${escHtml(lastId)})</span>` : ''}
+      </td>
+      <td style="padding:6px 8px;text-align:right">
+        <button class="btn btn-secondary" style="padding:2px 8px;font-size:0.8em" onclick="deleteVendor(${v.id})">✕</button>
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" style="padding:12px;text-align:center;opacity:0.5">No vendors yet</td></tr>';
+
+  // Update badge
+  const badge = document.getElementById('vendor-count-badge');
+  if (badge) badge.textContent = vendors.length ? `(${vendors.length})` : '';
+}
+
+async function addVendor() {
+  const name = document.getElementById('new-vendor-name').value.trim();
+  const iban = document.getElementById('new-vendor-iban').value.trim();
+  if (!name && !iban) { alert('Enter at least a name or IBAN'); return; }
+  await fetch('/api/vendors', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, iban}),
+  });
+  document.getElementById('new-vendor-name').value = '';
+  document.getElementById('new-vendor-iban').value = '';
+  await refreshVendors();
+}
+
+async function deleteVendor(id) {
+  if (!confirm('Remove this vendor?')) return;
+  await fetch(`/api/vendors/${id}`, {method: 'DELETE'});
+  await refreshVendors();
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // Wait for DOM then init
@@ -797,6 +902,7 @@ if (document.readyState === 'loading') {
 
 // Initial load
 refreshJobs();
+updateDevPanel();  // populate vendor badge on load
 </script>
 </body>
 </html>

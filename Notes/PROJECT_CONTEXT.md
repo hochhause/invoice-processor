@@ -158,6 +158,20 @@ MDX_MIN_CHARS=80                         # Min printable chars in markdown befor
 - `iban`, `bic`, `due_date`, `reference`
 - Legacy (always empty): `bankgiro`, `plusgiro`
 
+**Field Confidence Statuses** (per field, stored in `field_statuses` JSON column)
+- `SUCCESSFUL` — value found and passes sanity checks; QR-filled fields always SUCCESSFUL
+- `SUSPICIOUS` — value extracted but looks wrong (image artifact, too short, too small, defaulted)
+- `EMPTY` — value not found
+- Both EMPTY and SUSPICIOUS fields are sent to AI on retry
+
+**Suspicious detection rules** (in `extract.py`):
+- `receiver`: contains HTML tags / `<!-- image -->` → cleared to empty, status=SUSPICIOUS
+- `invoice_id`: len < 6, or alphanumeric ratio < 0.5 → SUSPICIOUS
+- `amount`: float < 100.0 → SUSPICIOUS
+- `iban`: body after country code has >4 alpha chars, or invalid MOD-97 → SUSPICIOUS
+- `due_date`: defaulted to end-of-month → SUSPICIOUS
+- QR-filled: overrides to SUCCESSFUL unconditionally
+
 **Flag Names** (error tracking)
 - ERROR flags (block payment): `amount_not_found`, `currency_not_found`, `receiver_not_found`, `due_date_not_found`, `no_payment_method`, `reference_not_found`, `iban_invalid_checksum`
 - WARN flags (non-blocking): `invoice_id_not_found`, `due_date_defaulted`, `iban_missing_bic`

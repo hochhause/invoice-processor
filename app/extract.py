@@ -5,11 +5,23 @@ No LLM involved — pure pattern matching.
 
 Bank-specific rule sets: import from rules/<CSV_RULE_SET>.py if present,
 otherwise use defaults defined here.
+
+Field confidence levels:
+  SUCCESSFUL — value found and passes sanity checks
+  SUSPICIOUS — value found but looks wrong (image artifact, too short, too small, etc.)
+  EMPTY      — value not found at all
+
+QR-filled fields always become SUCCESSFUL (overridden in pipeline.py).
 """
 import calendar
 import os
 import re
 from datetime import datetime
+
+# Field confidence levels
+FIELD_STATUS_SUCCESSFUL = "SUCCESSFUL"
+FIELD_STATUS_SUSPICIOUS = "SUSPICIOUS"
+FIELD_STATUS_EMPTY = "EMPTY"
 
 # Fields whose absence/issues block payment → needs_review=YES
 ERROR_FLAGS = frozenset({
@@ -50,12 +62,10 @@ def _clean_iban(raw):
     # Remove all spaces first
     raw = re.sub(r"\s", "", raw)
     # Match valid IBAN: CC + 2 check digits + 11-30 alphanumeric (total 15-34 chars, typically 22)
-    # Use non-greedy match to stop at first non-IBAN character
     m = re.match(r"([A-Z]{2}\d{2}[A-Z0-9]{11,30})", raw)
     if not m:
         return ""
     iban = m.group(1)
-    # Valid IBANs are 15-34 chars; if we got more, it's likely captured garbage
     return iban if 15 <= len(iban) <= 34 else ""
 
 
@@ -74,6 +84,16 @@ def _validate_iban_checksum(iban: str) -> bool:
         return int(numeric) % 97 == 1
     except ValueError:
         return False
+
+
+def _iban_suspicious_letters(iban: str) -> bool:
+    """True if IBAN body (after 2-char country code) has >4 alpha chars.
+    Swiss IBANs have 0, UK IBANs have 4 (bank code). More than 4 → likely an OCR artifact."""
+    stripped = re.sub(r"\s", "", iban)
+    if len(stripped) < 2:
+        return True
+    body_letters = sum(1 for c in stripped[2:] if c.isalpha())
+    return body_letters > 4
 
 
 def _extract_dates(text):
@@ -183,41 +203,30 @@ DEFAULT_PATTERNS = {
     "iban": [
         r"IBAN\s*(?:Number)?[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,})",
         r"IBAN[:\s]*([A-Z]{2}\d{2}[A-Z0-9\s]{11,})",
-        # Generic IBAN pattern: match country code + check digits + alphanumeric/spaces
-        # Stops at first non-IBAN character (like transition to letters for text)
         r"\b([A-Z]{2}\d{2}(?:[A-Z0-9\s]){11,30}?)(?:[a-z]|$|\s[A-Z]{2,})",
     ],
     "bic": [
         r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
-        # BIC with optional spaces inside: "FUIB UA 2X" → "FRIBUAA2X"
         r"(?:Swift\s*Code|BIC|SWIFT)[:\s]+([A-Z]{4,6}\s*[A-Z0-9]{2,4}\s*[A-Z0-9]{0,3})",
     ],
     # LEGACY: Bankgiro/Plusgiro are Swedish-only payment methods, no longer extracted.
     # "bankgiro": [r"Bankgiro[:\s]*([\d\-]+)"],
     # "plusgiro": [r"Plusgiro[:\s]*([\d\-]+)"],
     "due_date": [
-        # Table cell: | Zahlbar bis | 30.06.2026 |  (case-insensitive)
         r"\|\s*[Zz]ahlbar\s+bis\s*:?\s*\|\s*([\d]{1,2}\.[\d]{1,2}\.[\d]{4})\s*\|",
-        # Table cell with German month name: | zahlbar bis: | 5. Oktober 2025 |
         r"\|\s*[Zz]ahlbar\s+bis\s*:?\s*\|\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
-        # Inline with German month name: zahlbar bis: 5. Dezember 2025
         r"[Zz]ahlbar\s+bis\s*:?\s*(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
-        # "bis zum" pattern: bis zum 30.04.2026 or bis zum 30/04/2026
         r"bis\s+zum\s+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"bis\s+zum\s+(\d{1,2}\.\s*(?:Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4})",
-        # Fälligkeitsdatum table: | Fälligkeitsdatum | 10/13/2024 |
         r"\|\s*F[äa]lligkeitsdatum\s*\|\s*([\d]{1,2}[\/\.][\d]{1,2}[\/\.][\d]{4})",
-        # English
         r"DUE\s+DATE\s*\|?\s*([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Due\s+Date[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Payment\s+Due[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Payable\s+by[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
-        # German / Swiss inline
         r"[Zz]ahlbar\s+bis[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"F[äa]llig(?:keitsdatum)?[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Zahlungsfrist[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
         r"Valuta[:\s]+([\d]{1,2}[\/\-\.][\d]{1,2}[\/\-\.][\d]{2,4})",
-        # ISO date after label
         r"Due\s+Date[:\s]+(\d{4}-\d{2}-\d{2})",
         r"[Zz]ahlbar\s+bis[:\s]+(\d{4}-\d{2}-\d{2})",
     ],
@@ -254,7 +263,6 @@ def _load_rule_set() -> dict:
     spec = importlib.util.spec_from_file_location("rules", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    # rules file may override individual keys; merge with defaults
     patterns = dict(DEFAULT_PATTERNS)
     if hasattr(mod, "PATTERNS"):
         patterns.update(mod.PATTERNS)
@@ -266,6 +274,7 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
         skip_fields = set()
     patterns = _load_rule_set()
     flags = []
+    statuses = {}  # field → SUCCESSFUL | SUSPICIOUS | EMPTY
 
     # Import whitelist check (lazy import to avoid circular dep)
     is_whitelisted = None
@@ -276,13 +285,40 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
         except ImportError:
             pass
 
+    # ── invoice_id ────────────────────────────────────────────────────────────
     invoice_id = _first_match(patterns["invoice_id"], md) if "invoice_id" not in skip_fields else ""
+    if not invoice_id:
+        statuses["invoice_id"] = FIELD_STATUS_EMPTY
+    elif len(invoice_id) < 6:
+        statuses["invoice_id"] = FIELD_STATUS_SUSPICIOUS
+        flags.append("invoice_id_suspicious")
+    elif sum(1 for c in invoice_id if not c.isalnum() and c not in "-./") / len(invoice_id) > 0.5:
+        statuses["invoice_id"] = FIELD_STATUS_SUSPICIOUS
+        flags.append("invoice_id_suspicious")
+    else:
+        statuses["invoice_id"] = FIELD_STATUS_SUCCESSFUL
 
+    # ── amount ────────────────────────────────────────────────────────────────
     amount = ""
     if "amount" not in skip_fields:
         amount_raw = _first_match(patterns["amount"], md)
         amount = _clean_amount(amount_raw) if amount_raw else ""
+    if not amount:
+        statuses["amount"] = FIELD_STATUS_EMPTY
+    else:
+        try:
+            amt_f = float(amount)
+            if amt_f == 0.0:
+                amount = ""
+                statuses["amount"] = FIELD_STATUS_EMPTY
+            elif amt_f < 100.0:
+                statuses["amount"] = FIELD_STATUS_SUSPICIOUS
+            else:
+                statuses["amount"] = FIELD_STATUS_SUCCESSFUL
+        except ValueError:
+            statuses["amount"] = FIELD_STATUS_SUSPICIOUS
 
+    # ── currency ──────────────────────────────────────────────────────────────
     currency = ""
     if "currency" not in skip_fields:
         m = re.search(CURRENCY_PATTERN, md, re.IGNORECASE)
@@ -293,9 +329,9 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
                 if symbol in md:
                     currency = code
                     break
-        if not currency:
-            flags.append("currency_not_found")
+    statuses["currency"] = FIELD_STATUS_SUCCESSFUL if currency else FIELD_STATUS_EMPTY
 
+    # ── receiver ──────────────────────────────────────────────────────────────
     receiver = ""
     if "receiver" not in skip_fields:
         receiver = _first_match(patterns["receiver"], md)
@@ -306,52 +342,84 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
                    and ln.upper() not in ("INVOICE", "BILL", "RECEIPT") and len(ln) > 3:
                     receiver = ln
                     break
-        # Mark HTML artifacts as missing
-        if receiver and "<!-- image -->" in receiver:
+        # HTML image placeholder → clear but mark SUSPICIOUS (OCR picked up artifact)
+        if receiver and (
+            "<!-- image -->" in receiver.lower()
+            or re.search(r"<[a-z!][^>]{0,20}>", receiver, re.IGNORECASE)
+        ):
             receiver = ""
-        # Flag unknown receivers as suspicious
-        elif receiver and is_whitelisted and not is_whitelisted("receiver", receiver):
+            statuses["receiver"] = FIELD_STATUS_SUSPICIOUS
+        elif not receiver:
+            statuses["receiver"] = FIELD_STATUS_EMPTY
+        elif is_whitelisted and not is_whitelisted("receiver", receiver):
+            statuses["receiver"] = FIELD_STATUS_SUSPICIOUS
             flags.append("receiver_suspicious")
+        else:
+            statuses["receiver"] = FIELD_STATUS_SUCCESSFUL
 
+    # ── iban ──────────────────────────────────────────────────────────────────
     iban = ""
     if "iban" not in skip_fields:
         iban_raw = _first_match(patterns["iban"], md)
         iban = _clean_iban(iban_raw) if iban_raw else ""
     dev_mode_iban = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
-    if iban and not _validate_iban_checksum(iban):
-        if dev_mode_iban:
-            flags.append("iban_invalid_checksum_dev_skipped")
+    iban_ok = True
+    if iban:
+        if _iban_suspicious_letters(iban):
+            statuses["iban"] = FIELD_STATUS_SUSPICIOUS
+            flags.append("iban_suspicious")
+            iban_ok = False
+        elif not _validate_iban_checksum(iban):
+            if dev_mode_iban:
+                flags.append("iban_invalid_checksum_dev_skipped")
+                statuses["iban"] = FIELD_STATUS_SUSPICIOUS
+            else:
+                flags.append("iban_invalid_checksum")
+                statuses["iban"] = FIELD_STATUS_SUSPICIOUS
+                iban = ""
+            iban_ok = False
+        elif is_whitelisted and not is_whitelisted("iban", iban):
+            flags.append("iban_suspicious")
+            statuses["iban"] = FIELD_STATUS_SUSPICIOUS
+            iban_ok = False
         else:
-            flags.append("iban_invalid_checksum")
-            iban = ""
-    elif iban and is_whitelisted and not is_whitelisted("iban", iban):
-        flags.append("iban_suspicious")
+            statuses["iban"] = FIELD_STATUS_SUCCESSFUL
+    else:
+        statuses["iban"] = FIELD_STATUS_EMPTY
 
+    # ── bic ───────────────────────────────────────────────────────────────────
     bic = ""
     if "bic" not in skip_fields:
         bic_raw = _first_match(patterns["bic"], md)
         bic = _clean_bic(bic_raw) if bic_raw else ""
+    statuses["bic"] = FIELD_STATUS_SUCCESSFUL if bic else FIELD_STATUS_EMPTY
 
     bankgiro = ""
     plusgiro = ""
 
+    # ── due_date ──────────────────────────────────────────────────────────────
     due_date = ""
     due_date_defaulted = False
     if "due_date" not in skip_fields:
         due_date_raw = _first_match(patterns["due_date"], md)
         due_date, due_date_defaulted = _generate_due_date(md, due_date_raw)
+    if due_date_defaulted:
+        statuses["due_date"] = FIELD_STATUS_SUSPICIOUS
+    elif due_date:
+        statuses["due_date"] = FIELD_STATUS_SUCCESSFUL
+    else:
+        statuses["due_date"] = FIELD_STATUS_EMPTY
 
+    # ── reference ─────────────────────────────────────────────────────────────
     reference = ""
     if "reference" not in skip_fields:
         reference = _first_match(patterns["reference"], md)
         reference = re.sub(r"\s+", "", reference)
+    statuses["reference"] = FIELD_STATUS_SUCCESSFUL if reference else FIELD_STATUS_EMPTY
 
+    # ── Mandatory field flags ─────────────────────────────────────────────────
     dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
     mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
-
-    # Mark zero amounts as missing
-    if amount and (amount == "0" or float(amount) == 0.0):
-        amount = ""
 
     check = {"amount": amount, "currency": currency,
              "receiver": receiver, "due_date": due_date, "reference": reference}
@@ -359,20 +427,16 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
         if not check[field]:
             flags.append(f"{field}_not_found")
 
-    # invoice_id: warn if missing or suspiciously short (< 6 chars, unless from Swiss QR)
-    if not invoice_id:
+    # invoice_id: warn if missing (suspicious already flagged above)
+    if not invoice_id and "invoice_id_suspicious" not in flags:
         flags.append("invoice_id_not_found")
-    elif len(invoice_id) < 6:
-        # Short invoice IDs are suspicious unless from Swiss QR (which has long refs)
-        # This will be relaxed if coming from QR in pipeline
-        flags.append("invoice_id_suspicious")
 
     # due_date defaulted to end-of-month: warn, remove blocking error
     if due_date_defaulted:
         flags.append("due_date_defaulted")
         flags = [f for f in flags if f != "due_date_not_found"]
 
-    # Payment method check: IBAN + BIC required (bankgiro/plusgiro legacy, no longer supported)
+    # Payment method check
     if not (iban and bic):
         flags.append("no_payment_method")
     elif iban and not bic:
@@ -396,28 +460,137 @@ def extract_fields(md: str, filename: str, skip_fields: set = None, check_whitel
         "reference": reference,
         "needs_review": "YES" if has_error else "NO",
         "review_reasons": "; ".join(deduped),
-        "flags": deduped,          # structured list for pipeline merging
-        "ocr_method": "",          # filled by pipeline.py
+        "flags": deduped,
+        "field_statuses": statuses,
+        "ocr_method": "",
     }
 
 
-def llm_extract_field(md: str, field: str) -> str:
-    """Ask Haiku to extract a single missing field from markdown (Tier 1 fallback)."""
-    import os
+def validate_job_fields(job_data: dict) -> dict:
+    """Validate manually reviewed job fields. Returns (needs_review, review_reasons)."""
+    flags = []
+    dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
+    mandatory = MANDATORY_BASE if dev_mode else MANDATORY_PROD
+
+    for field in mandatory:
+        val = job_data.get(field, "").strip() if job_data.get(field) else ""
+        if not val:
+            flags.append(f"{field}_not_found")
+
+    iban = job_data.get("iban", "").strip() if job_data.get("iban") else ""
+    if iban:
+        if not _validate_iban_checksum(iban):
+            flags.append("iban_invalid_checksum")
+        elif job_data.get("bic"):
+            pass
+        else:
+            flags.append("iban_missing_bic")
+    elif job_data.get("bic"):
+        flags.append("no_payment_method")
+
+    amount = job_data.get("amount", "").strip() if job_data.get("amount") else ""
+    if amount:
+        try:
+            if float(amount) == 0.0:
+                flags.append("amount_not_found")
+        except ValueError:
+            flags.append("amount_not_found")
+
+    has_error = any(f in ERROR_FLAGS for f in flags)
+    return {
+        "needs_review": "YES" if has_error else "NO",
+        "review_reasons": "; ".join(flags),
+        "flags": flags,
+    }
+
+
+def evaluate_field_statuses(fields: dict) -> dict:
+    """Re-evaluate SUCCESSFUL/SUSPICIOUS/EMPTY for each field based on current values.
+    Input: dict with field values (invoice_id, amount, currency, receiver, iban, bic, due_date, reference).
+    Returns: new field_statuses dict. Whitelist not checked (operator edits are trusted)."""
+    S, P, E = FIELD_STATUS_SUCCESSFUL, FIELD_STATUS_SUSPICIOUS, FIELD_STATUS_EMPTY
+    statuses = {}
+
+    # invoice_id
+    v = (fields.get("invoice_id") or "").strip()
+    if not v:
+        statuses["invoice_id"] = E
+    elif len(v) < 6:
+        statuses["invoice_id"] = P
+    elif sum(1 for c in v if not c.isalnum() and c not in "-./") / len(v) > 0.5:
+        statuses["invoice_id"] = P
+    else:
+        statuses["invoice_id"] = S
+
+    # amount
+    v = (fields.get("amount") or "").strip()
+    if not v:
+        statuses["amount"] = E
+    else:
+        try:
+            f = float(v)
+            statuses["amount"] = E if f == 0.0 else (P if f < 100.0 else S)
+        except ValueError:
+            statuses["amount"] = P
+
+    # currency
+    statuses["currency"] = S if (fields.get("currency") or "").strip() else E
+
+    # receiver
+    v = (fields.get("receiver") or "").strip()
+    if not v:
+        statuses["receiver"] = E
+    elif "<!-- image -->" in v.lower() or re.search(r"<[a-z!][^>]{0,20}>", v, re.IGNORECASE):
+        statuses["receiver"] = P
+    else:
+        statuses["receiver"] = S
+
+    # iban
+    v = (fields.get("iban") or "").strip()
+    if not v:
+        statuses["iban"] = E
+    elif _iban_suspicious_letters(v):
+        statuses["iban"] = P
+    elif not _validate_iban_checksum(v):
+        statuses["iban"] = P
+    else:
+        statuses["iban"] = S
+
+    # bic
+    statuses["bic"] = S if (fields.get("bic") or "").strip() else E
+
+    # due_date — treat any non-empty value as SUCCESSFUL after manual edit
+    statuses["due_date"] = S if (fields.get("due_date") or "").strip() else E
+
+    # reference
+    statuses["reference"] = S if (fields.get("reference") or "").strip() else E
+
+    return statuses
+
+
+def llm_extract_fields(md: str, fields: list) -> dict:
+    """Ask Haiku to extract multiple fields in one call. Returns {field: value} for found fields."""
+    import os, json as _json
 
     key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not key:
-        return ""
+        return {}
 
-    prompt = f"""Extract the {field} from this invoice markdown.
-Return ONLY the extracted value, nothing else. No explanation.
-If the {field} is not found, return: NOT_FOUND
+    fields_list = "\n".join(f'  "{f}": "<value or null>"' for f in fields)
+    prompt = f"""You are extracting structured data from a Swiss invoice.
+Extract the following fields from the markdown below.
+Return ONLY valid JSON — no explanation, no markdown fences.
+Use null for fields not found. Do not guess or invent values.
 
-Field to extract: {field}
+Fields:
+{{{fields_list}
+}}
 
-Markdown:
-{md[:2000]}
+Invoice markdown:
+{md[:3000]}
 """
+
+    print(f"[llm_extract_fields] fields={fields} prompt_chars={len(prompt)}\n--- PROMPT ---\n{prompt}\n--- END ---", flush=True)
 
     try:
         from anthropic import Anthropic
@@ -425,11 +598,19 @@ Markdown:
         client = Anthropic(api_key=key)
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            stop_sequences=["}"],
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "{"},  # prefill — forces JSON object start
+            ],
         )
-        result = response.content[0].text.strip()
-        return "" if result == "NOT_FOUND" else result
+        # Model continues from "{", stop_sequence "}" closes it
+        raw = "{" + response.content[0].text + "}"
+        print(f"[llm_extract_fields] raw={raw!r} stop={response.stop_reason}", flush=True)
+
+        parsed = _json.loads(raw)
+        return {k: v for k, v in parsed.items() if v and v != "null"}
     except Exception as e:
-        print(f"[llm_extract_field] Failed for {field}: {e}")
-        return ""
+        print(f"[llm_extract_fields] FAILED: {type(e).__name__}: {e}", flush=True)
+        return {}

@@ -776,7 +776,7 @@ body {
 }
 
 .modal-form-pane {
-  flex: 0 0 380px;
+  flex: 0 0 440px;
   display: flex;
   flex-direction: column;
   background: white;
@@ -880,14 +880,16 @@ body {
 }
 
 .form-input {
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--lf-text-dark);
   background: white;
   font-family: inherit;
   transition: all var(--transition-fast);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .form-input::placeholder {
@@ -900,6 +902,23 @@ body {
   background: #f8fffe;
   box-shadow: 0 0 0 3px rgba(34, 186, 160, 0.1);
 }
+
+/* Field confidence status colors */
+.form-input.field-successful {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+.form-input.field-suspicious {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+.form-input.field-empty {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+[data-theme="dark"] .form-input.field-successful { background: #052e16; border-color: #16a34a; }
+[data-theme="dark"] .form-input.field-suspicious  { background: #1c1107; border-color: #d97706; }
+[data-theme="dark"] .form-input.field-empty       { background: #1c0505; border-color: #dc2626; }
 
 .modal-actions {
   display: flex;

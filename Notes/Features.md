@@ -159,6 +159,24 @@
 
 ---
 
+### 10a. Field Confidence Status System
+
+- **Description:** Every extracted field carries a confidence status: `SUCCESSFUL`, `SUSPICIOUS`, or `EMPTY`. Displayed as green/amber/red input borders in the review modal.
+- **Entry point:** `app/extract.py:extract_fields()` → returns `field_statuses` dict; pipeline.py upgrades QR-filled fields to SUCCESSFUL
+- **Key files:** `app/extract.py`, `app/pipeline.py`, `app/db.py` (column `field_statuses`), `app/static/style.css` (`.field-successful`, `.field-suspicious`, `.field-empty`)
+- **Rules:**
+  - QR-filled fields → always `SUCCESSFUL`
+  - Regex-matched, passes sanity → `SUCCESSFUL`
+  - `receiver` has HTML artifact → `SUSPICIOUS` (cleared from value)
+  - `invoice_id` < 6 chars or mostly non-alphanumeric → `SUSPICIOUS`
+  - `amount` < 100.0 → `SUSPICIOUS`
+  - `iban` body has >4 letters or fails MOD-97 → `SUSPICIOUS`
+  - `due_date` defaulted to end-of-month → `SUSPICIOUS`
+  - Not found → `EMPTY`
+- **AI trigger:** AI retry button visible when any field is EMPTY or SUSPICIOUS; sends both EMPTY+SUSPICIOUS to Haiku
+
+---
+
 ### 10. Regex Field Extraction (IBAN, BIC, Amount, Currency, Dates, etc.)
 
 - **Description:** Pattern-matched extraction of invoice fields from markdown text. Supports bank-specific rule sets.
