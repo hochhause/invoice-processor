@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     bic          TEXT DEFAULT '',
     amount       TEXT DEFAULT '',
     currency     TEXT DEFAULT '',
-    due_date     TEXT DEFAULT '',
     reference    TEXT DEFAULT '',
     invoice_id   TEXT DEFAULT '',
     bank_target  TEXT DEFAULT '',

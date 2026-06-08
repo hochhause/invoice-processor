@@ -38,11 +38,11 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Columns that may be written back to a job row from pipeline output.
 PERSIST_KEYS = {
     "receiver", "iban", "bic", "amount", "currency",
-    "due_date", "reference", "invoice_id", "bank_target", "status",
+    "reference", "invoice_id", "bank_target", "status",
 }
 # Editable fields accepted by the review form.
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency",
-                 "due_date", "iban", "bic", "reference"]
+                 "iban", "bic", "reference"]
 MANDATORY = ["receiver", "iban", "amount", "currency"]
 
 
@@ -284,7 +284,7 @@ async def download_confirm():
 async def download_csv():
     jobs = db.get_jobs(include_archived=False)
     fields = ["filename", "receiver", "iban", "bic", "amount", "currency",
-              "due_date", "reference", "invoice_id", "bank_target", "status"]
+              "reference", "invoice_id", "bank_target", "status"]
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     w.writeheader()

@@ -120,6 +120,39 @@ due_date, reference, invoice_id, bank_target, created_at, updated_at
 
 ---
 
+### Export Hard-Blocked on Incomplete Invoices
+
+**Decision:** `POST /download/confirm` refuses (HTTP 409) if any non-archived invoice still has `status ∈ {needs_review, error, LLM-Pending}` or is missing a mandatory pain.001 field (`receiver`, `iban`, `amount`, `currency`). The response carries a `blockers` list (`id`, `filename`, `status`, `missing[]`) and the export screen renders a popup listing them; the operator must fix all before export proceeds. `GET /api/export-readiness` exposes the same check so the UI can pre-gate the button.
+
+**Distinction from the MANUAL rule above:** unrouted-but-complete invoices (`bank_target=MANUAL`) are *excluded with confirmation* — they do not block. Incomplete / review-pending invoices *hard-block* — bad data must not silently drop out of a payment file. Two different failure modes, two different responses.
+
+**Reason:** A pain.001 file is a payment instruction. Silently omitting an invoice that an operator believes is being paid is a financial-correctness hazard; forcing completion first guarantees the exported batch == the operator's intent.
+
+**Location:** `app/main.py` → `_export_blockers()`, `download_confirm()`, `export_readiness()`.
+
+---
+
+### LLM Input Strategy: Images Only (for now)
+
+**Decision:** LLM extraction uses PDF page images only (converted at 150 DPI). Text layers are not extracted or sent to the model.
+
+**Rationale — three approaches considered:**
+
+| Approach | Cost/invoice | Accuracy | Tradeoff |
+|---|---|---|---|
+| **Text-first (fallback)** | 0.0024¢ best, 0.050¢ worst | ⚠️ Silent failures on corrupt text | Too risky; text layers can be stale/corrupted |
+| **Text + images (both)** | 0.050¢ (constant) | ⭐⭐⭐⭐⭐ Robust | Always expensive; overkill for clean PDFs |
+| **Image-only (chosen)** | 0.048¢ | ⭐⭐⭐⭐ Good | Works for all PDF types; proven reliable |
+| Hybrid (future) | 0.026¢ (avg) | ⭐⭐⭐⭐⭐ | Best long-term if text layer adoption is high; requires conditional logic |
+
+**Current implementation:** Images at 150 DPI are sufficient for invoices. OCR confusion (e.g., `I`/`1`, `O`/`0`) is a model quality issue, not an input strategy issue — would persist with text extraction too.
+
+**Future consideration:** If 80%+ of invoices have clean embedded OCR text layers, switch to **hybrid** (text-first with image validation fallback) to cut costs by ~45%. Requires tracking text layer quality to make the decision.
+
+**Location:** `app/llm.py` → `_pdf_to_images()`.
+
+---
+
 ## Retained Decisions (from prior architecture)
 
 ### IBAN MOD-97 Checksum Validation

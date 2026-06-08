@@ -1,0 +1,75 @@
+<div class="modal-overlay" id="modal" onclick="closeModalOnBackdrop(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title">Invoice</h2>
+      <span class="modal-nav" id="modal-nav"></span>
+      <button class="btn btn-ghost" style="padding:5px 10px" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="modal-pdf">
+        <iframe id="pdf-frame" src="" title="Invoice PDF"></iframe>
+      </div>
+
+      <div class="modal-form">
+        <input type="hidden" id="modal-job-id">
+
+        <div class="form-section">
+          <div class="form-section-title">Payment Details</div>
+          <div class="form-grid">
+            <div class="field-group">
+              <label>Receiver</label>
+              <input type="text" id="f-receiver" placeholder="Supplier name">
+            </div>
+            <div class="field-group">
+              <label>Invoice ID</label>
+              <input type="text" id="f-invoice-id" placeholder="INV-…">
+            </div>
+            <div class="field-group">
+              <label>Amount</label>
+              <input type="text" id="f-amount" placeholder="1234.56">
+            </div>
+            <div class="field-group">
+              <label>Currency</label>
+              <input type="text" id="f-currency" placeholder="CHF" maxlength="3">
+            </div>
+            <div class="field-group">
+              <label>Reference</label>
+              <input type="text" id="f-reference" placeholder="Payment reference">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Bank Details</div>
+          <div class="form-grid full">
+            <div class="field-group">
+              <label>IBAN</label>
+              <input type="text" id="f-iban" placeholder="CH…">
+            </div>
+            <div class="field-group">
+              <label>BIC</label>
+              <input type="text" id="f-bic" placeholder="Missing — required for non-CHF">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Bank Assignment</div>
+          <div class="bank-assign">
+            <div class="bank-pill" id="pill-bkb" onclick="selectBankPill('BKB')">BKB</div>
+            <div class="bank-pill" id="pill-raiff" onclick="selectBankPill('RAIFFEISEN')">Raiffeisen</div>
+            <div class="bank-pill" id="pill-manual" onclick="selectBankPill('MANUAL')">Manual</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="saveModal()">Save</button>
+      <button class="btn btn-primary" onclick="saveAndNext()">Save &amp; Next →</button>
+    </div>
+  </div>
+</div>

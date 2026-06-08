@@ -15,7 +15,7 @@ def run_startup_tests():
             failures.append(f"FAIL [{name}]: {detail}")
 
     # ── T1: IBAN checksum validation ──────────────────────────────────────────
-    from extract import _validate_iban_checksum
+    from pipeline import _validate_iban as _validate_iban_checksum
     check("T1a-valid-CH", _validate_iban_checksum("CH5604835012345678009"),
           "Valid CH IBAN should pass checksum")
     check("T1b-valid-DE", _validate_iban_checksum("DE89370400440532013000"),
@@ -36,43 +36,12 @@ def run_startup_tests():
     check("T2d-too-short", not bool(re.match(BIC_PATTERN, "BLKB")),
           "4-char string is not a valid BIC")
 
-    # ── T3: extract_fields returns expected structure ─────────────────────────
-    from extract import extract_fields
-    SAMPLE_MD = """
-# INVOICE NUMBER | INV-TEST001
-Acme Corp
-
-| Total | 1234.56 |
-
-IBAN: CH5604835012345678009
-BIC: BLKBCH22
-CHF
-
-Due Date: 01/06/2026
-order no: ORD-999
-"""
-    fields = extract_fields(SAMPLE_MD, "test.pdf")
-    check("T3a-invoice-id", fields.get("invoice_id") == "INV-TEST001",
-          f"Expected INV-TEST001, got {fields.get('invoice_id')}")
-    check("T3b-amount", fields.get("amount") == "1234.56",
-          f"Expected 1234.56, got {fields.get('amount')}")
-    check("T3c-currency", fields.get("currency") == "CHF",
-          f"Expected CHF, got {fields.get('currency')}")
-    check("T3d-iban", "CH5604835012345678009" in fields.get("iban", ""),
-          f"Expected CH IBAN, got {fields.get('iban')}")
-    check("T3e-bic", fields.get("bic") == "BLKBCH22",
-          f"Expected BLKBCH22, got {fields.get('bic')}")
-    check("T3f-no-bankgiro", fields.get("bankgiro") == "",
-          "bankgiro should always be empty (legacy removed)")
-    check("T3g-no-plusgiro", fields.get("plusgiro") == "",
-          "plusgiro should always be empty (legacy removed)")
-
     # ── T4: pain.001 XML is well-formed and has required elements ─────────────
     from xml_export import build_pain001
     import xml.etree.ElementTree as ET
 
     debtor = {"name": "Test Corp AG", "iban": "CH5604835012345678009", "bic": "BLKBCH22"}
-    jobs_chf = [{"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+    jobs_chf = [{"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
                  "amount": "500.00", "currency": "CHF", "receiver": "Vendor AG",
                  "invoice_id": "INV-001", "due_date": "2026-07-01", "reference": "REF-001"}]
     xml_str = build_pain001(jobs_chf, debtor)
@@ -92,10 +61,10 @@ order no: ORD-999
 
     # ── T5: Multi-currency → multiple PmtInf blocks ───────────────────────────
     jobs_multi = [
-        {"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+        {"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
          "amount": "100.00", "currency": "CHF", "receiver": "A", "invoice_id": "I1",
          "due_date": "2026-07-01", "reference": "R1"},
-        {"status": "done", "iban": "DE89370400440532013000", "bic": "DEUTDEDB",
+        {"status": "LLM-Done", "iban": "DE89370400440532013000", "bic": "DEUTDEDB",
          "amount": "200.00", "currency": "EUR", "receiver": "B", "invoice_id": "I2",
          "due_date": "2026-07-02", "reference": "R2"},
     ]
@@ -112,9 +81,9 @@ order no: ORD-999
     # ── T6: Jobs missing IBAN are skipped; IBAN-only (no BIC) are included ───────
     # BIC is optional for Swiss QR-bill and SEPA — only IBAN is mandatory.
     jobs_skip = [
-        {"status": "done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
+        {"status": "LLM-Done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
          "currency": "CHF", "receiver": "X", "invoice_id": "I3", "due_date": "2026-07-01", "reference": "R3"},
-        {"status": "done", "iban": "CH5604835012345678009", "bic": "",
+        {"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "",
          "amount": "200.00", "currency": "CHF", "receiver": "Y", "invoice_id": "I4",
          "due_date": "2026-07-01", "reference": "R4"},
     ]
@@ -130,7 +99,7 @@ order no: ORD-999
         failures.append(f"FAIL [T6-skip-xml]: {e}")
 
     # ── Report ────────────────────────────────────────────────────────────────
-    total = 16  # approximate number of checks
+    total = 9  # approximate number of checks
     passed = total - len(failures)
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)
