@@ -17,11 +17,21 @@ Routes (final state):
 """
 import csv
 import io
+import logging
 import os
 import uuid
 import zipfile
 from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Suppress noisy poll endpoints from uvicorn access log
+class _SuppressPolling(logging.Filter):
+    _SKIP = {'/api/jobs'}
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(s in msg for s in self._SKIP)
+
+logging.getLogger('uvicorn.access').addFilter(_SuppressPolling())
 
 from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse

@@ -187,8 +187,9 @@ CREATE TABLE jobs (
 | POST | `/api/review/{id}` | Save edited fields |
 | POST | `/api/run-llm-batch` | Trigger LLM on all LLM-Pending jobs |
 | POST | `/api/assign-bank/{id}` | Override bank_target |
+| GET | `/api/export-readiness` | `{ready, blockers[]}` — gate export, drive popup |
 | GET | `/api/pdf/{id}` | Serve original PDF |
-| POST | `/download/confirm` | Generate + zip both pain.001 files, archive |
+| POST | `/download/confirm` | 409 if not export-ready; else generate + zip both pain.001 files, archive |
 | GET | `/download/csv` | Export CSV |
 | DELETE | `/api/jobs/{id}` | Delete single job |
 | DELETE | `/api/clear-all` | Wipe all non-archived jobs |

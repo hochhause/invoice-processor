@@ -342,19 +342,63 @@ async def download_confirm():
 
 ---
 
-## Step 6 — Dashboard UI Rework (`app/templates/index.html`)
+## Step 6 — Dashboard UI Rework (split files)
 
-**Recommended model:** `claude-sonnet-4-6` · **Effort: medium** — large HTML file requiring reading the existing index.html plus producing a full restyle. Needs to preserve existing JS polling logic while applying new CSS and restructuring modal layout. Sonnet medium beats Haiku high here: the existing file has implicit patterns (HTMX, polling intervals, modal state) that need understanding, not just transcription.
+**Recommended model:** `claude-sonnet-4-6` · **Effort: medium** — reads existing monolith index.html, extracts implicit JS/polling patterns, then produces four new files. Splitting adds structural decisions that benefit from Sonnet's synthesis; Haiku high would likely produce tangled import paths or miss shared state between JS modules.
 
 **Context for this session:**
-- [PLAN.md](PLAN.md) — Step 6 spec (design tokens, table columns, modal layout, topbar changes)
+- [PLAN.md](PLAN.md) — Step 6 spec (file split map, design tokens, table columns, modal layout)
 - [Notes/Features.md](Notes/Features.md) — sections: "2. Real-Time Job Status Table", "4. Full-Page Edit Modal", "3. Manual LLM Batch Trigger"
 - [Notes/export_screen_poc.html](Notes/export_screen_poc.html) — **primary style reference** — copy CSS variables, card styles, modal structure, topbar pattern verbatim
-- `app/templates/index.html` — read current file to understand existing JS polling, modal logic, HTMX patterns to preserve
+- `app/templates/index.html` — read current monolith to extract polling logic, modal state, HTMX patterns before splitting
+- `app/static/css/` and `app/static/js/` — read existing files to avoid clobbering
 
-**Goal:** Restyle main dashboard using POC dark UI. Apply Lyfegen brand tokens. Retain table polling + edit functionality.
+**Goal:** Break the monolithic index.html into focused files. Apply Lyfegen brand tokens + POC dark UI. Steps 1–5 are already complete — do not touch any Python files.
 
-**Lyfegen web brand tokens:**
+---
+
+### File Split Map
+
+```
+app/
+├── templates/
+│   ├── index.html                  ← lean shell: topbar + table + {% include %} only
+│   └── partials/
+│       └── modal_edit.html         ← full edit modal HTML (reused by export.html in Step 7)
+└── static/
+    ├── css/
+    │   └── main.css                ← all CSS: variables, layout, table, modal, badges
+    └── js/
+        ├── dashboard.js            ← table polling, row actions, LLM batch button
+        └── modal.js                ← modal open/close/save/save-next, bank pills, field colors
+```
+
+**`index.html` after split (skeleton only):**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+  <!-- topbar -->
+  <div class="topbar">...</div>
+  <!-- jobs table -->
+  <table id="jobs-table">...</table>
+  <!-- edit modal (shared partial) -->
+  {% include 'partials/modal_edit.html' %}
+  <script src="/static/js/modal.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
+```
+
+**`partials/modal_edit.html`:** contains only the modal `<div>` — no `<html>`, no `<script>` tags. JS lives in `modal.js`. Step 7 `export.html` will `{% include 'partials/modal_edit.html' %}` instead of duplicating.
+
+---
+
+### `main.css` — Lyfegen brand tokens
+
 ```css
 :root {
   --bg:        #0a1a18;    /* near Dark Teal #003438 */
@@ -372,48 +416,131 @@ async def download_confirm():
 }
 ```
 
-**Table columns (keep only):** Filename, Receiver, Amount, Currency, Due Date, IBAN, Status, Bank Target, Actions
+Includes styles for: topbar, table, status badges, bank-target chips, modal overlay, form grid, bank pills, scrollbars. Everything from the POC `<style>` block belongs here.
+
+---
+
+### `dashboard.js` responsibilities
+
+- Poll `GET /api/jobs` every 2s (only while any job has `status ∈ {LLM-Pending, needs_review}`)
+- Render table rows (receiver, amount, currency, due_date, iban, status badge, bank_target chip, edit button)
+- Topbar: show/hide "Run AI Extraction" based on `LLM-Pending` count
+- "Run AI Extraction" click → `POST /api/run-llm-batch` → show spinner in topbar
+- "Export →" click → `window.location = '/export'`
+- Edit icon click → calls `openModal(jobId)` from `modal.js`
+
+**Table columns:** Filename, Receiver, Amount, Currency, Due Date, IBAN, Status, Bank Target, Actions
 
 **Status badge colors:**
-- `qr_done` → teal pill
-- `needs_llm` → amber pill
-- `llm_done` → blue pill
+- `QR-processed` → teal pill
+- `LLM-Pending` → amber pill
+- `LLM-Done` → blue pill
 - `needs_review` → red pill
-- `archived` → gray pill (only shown with `?include_archived=true`)
+- `archived` → gray pill (hidden by default; shown with `?include_archived=true`)
 
-**Topbar buttons:**
-- "Run AI Extraction" — `POST /api/run-llm-batch`, shown only if `needs_llm` jobs exist
-- "Export →" — navigates to `/export`
-- Remove: "Process All", "Retry All", "Dev Fill All", all legacy buttons
+---
 
-**Edit modal (full-page):**
-- `max-width: 980px; height: calc(100vh - 48px)`
-- Grid: `1fr 1.8fr` (PDF iframe left, wider form right)
-- Form fields: receiver, invoice_id, amount, currency, due_date, iban, bic, reference
-- Bank assignment pills: BKB / Raiffeisen / Manual (calls `POST /api/assign-bank/{id}`)
-- Footer: **Close** | **Save** | **Save & Next →**
+### `modal.js` responsibilities
 
-**Files changed:** `app/templates/index.html`, `app/static/css/` (if separate file)
+- `openModal(jobId, jobIndex, totalJobs)` — fetch job from cached list, populate form, show overlay
+- `closeModal()` — hide overlay, discard unsaved changes
+- `saveModal()` → `POST /api/review/{id}` with form data
+- `saveAndNext()` → save then advance to next job index, call `openModal`
+- Bank pill click → `POST /api/assign-bank/{id}`, update active pill highlight
+- Field coloring: green (filled), amber (empty but non-blocking), red (empty + mandatory)
+- Exports: `window.openModal`, `window.closeModal` — callable from both `dashboard.js` and `export.html`
+
+---
+
+### `partials/modal_edit.html` structure
+
+```html
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title"></h2>
+      <span id="modal-nav"></span>
+      <button onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-pdf">
+        <iframe id="pdf-frame" src=""></iframe>
+      </div>
+      <div class="modal-form">
+        <!-- Payment Details section -->
+        <!-- Bank Details section -->
+        <!-- Bank Assignment pills -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal()">Close</button>
+      <div class="spacer"></div>
+      <button class="btn-ghost" onclick="saveModal()">Save</button>
+      <button class="btn-primary" onclick="saveAndNext()">Save &amp; Next →</button>
+    </div>
+  </div>
+</div>
+```
+
+Form fields: `receiver`, `invoice_id`, `amount`, `currency`, `due_date`, `iban`, `bic`, `reference`
+Bank pills: BKB / Raiffeisen / Manual
+
+---
+
+**Files created/changed:**
+
+| File | Action |
+|------|--------|
+| `app/templates/index.html` | Rewrite as lean shell |
+| `app/templates/partials/modal_edit.html` | **New** — extracted modal HTML |
+| `app/static/css/main.css` | **New** — all CSS from monolith + Lyfegen tokens |
+| `app/static/js/dashboard.js` | **New** — table polling + row actions |
+| `app/static/js/modal.js` | **New** — modal lifecycle |
+
+**Files NOT touched (Steps 1–5 complete):** `app/main.py`, `app/db.py`, `app/pipeline.py`, `app/llm.py`, `app/xml_export.py`, `app/qr_swiss.py`
 
 ---
 
 ## Step 7 — Export Screen (`app/templates/export.html`)
 
-**Recommended model:** `claude-sonnet-4-6` · **Effort: low** — POC already exists; task is wiring API calls and copying the modal from index.html. Well-defined. Low effort Sonnet is cheaper than Sonnet medium and the spec leaves no ambiguity.
+**Recommended model:** `claude-sonnet-4-6` · **Effort: low** — POC already exists; task is wiring API calls and using the shared partial + JS from Step 6. Well-defined. Low effort Sonnet is cheaper than Sonnet medium and the spec leaves no ambiguity.
 
 **Context for this session:**
 - [PLAN.md](PLAN.md) — Step 7 spec
-- [Notes/export_screen_poc.html](Notes/export_screen_poc.html) — **base file** — copy this HTML/CSS/JS verbatim then wire up real API calls
+- [Notes/export_screen_poc.html](Notes/export_screen_poc.html) — **base file** — copy drag-board HTML/CSS/JS verbatim then wire up real API calls
 - [Notes/Features.md](Notes/Features.md) — section: "5. Export Screen — Bank Assignment & Download"
-- [Notes/DECISIONS.md](Notes/DECISIONS.md) — sections: "Export Screen as Separate Route", "Unsorted Invoices Excluded from Download", "Archived Status Instead of Delete"
-- [Notes/PROJECT_CONTEXT.md](Notes/PROJECT_CONTEXT.md) — section: "API Routes" (assign-bank, download/confirm endpoints)
-- `app/templates/index.html` — read (completed in Step 6) to reuse edit modal component
+- [Notes/DECISIONS.md](Notes/DECISIONS.md) — sections: "Export Screen as Separate Route", "Unsorted Invoices Excluded from Download", "Archived Status Instead of Delete", "Export Hard-Blocked on Incomplete Invoices"
+- [Notes/PROJECT_CONTEXT.md](Notes/PROJECT_CONTEXT.md) — section: "API Routes" (assign-bank, export-readiness, download/confirm endpoints)
+- `app/templates/partials/modal_edit.html` — read (completed in Step 6) — include via Jinja2, do NOT duplicate
+- `app/static/css/main.css` — already loaded; no new CSS file needed
+- `app/static/js/modal.js` — already loaded; `openModal` available globally
 
-**Goal:** Productionize the POC. Wire to real API. Reuse edit modal from index.html.
+**Goal:** Productionize the POC. Wire to real API. Use shared partial + JS from Step 6 — no duplication.
 
-**Real API calls to wire:**
+**Template structure:**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <!-- export-specific styles inline or in main.css -->
+</head>
+<body>
+  <div class="topbar">...</div>
+  <div class="main">
+    <!-- three bank columns from POC -->
+  </div>
+  <div class="bottombar">...</div>
+  {% include 'partials/modal_edit.html' %}   {# shared — no duplication #}
+  <script src="/static/js/modal.js"></script>
+  <script src="/static/js/export.js"></script>
+</body>
+</html>
+```
+
+**New file: `app/static/js/export.js`** — drag-board logic only (no modal code):
 ```javascript
-// Init — load jobs
+// Init — load jobs, render columns
 const jobs = await fetch('/api/jobs').then(r => r.json());
 
 // Drag drop — reassign bank
@@ -423,21 +550,41 @@ await fetch(`/api/assign-bank/${id}`, {
   body: JSON.stringify({ bank_target: newZone.toUpperCase() })
 });
 
+// Pre-flight readiness check
+const readiness = await fetch('/api/export-readiness').then(r => r.json());
+if (!readiness.ready) { showBlockersPopup(readiness.blockers); return; }
+
 // Accept & Download
 const res = await fetch('/download/confirm', { method: 'POST' });
+if (res.status === 409) {
+  const { blockers } = await res.json();
+  showBlockersPopup(blockers);
+  return;
+}
 const blob = await res.blob();
-const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
-a.href = url; a.download = 'pain001_export.zip'; a.click();
+a.href = URL.createObjectURL(blob);
+a.download = 'pain001_export.zip';
+a.click();
 ```
+
+**Blockers popup:** inline `<div>` shown when export readiness fails — lists each blocking invoice (filename, status, missing fields). Operator must fix all before download proceeds.
 
 **Column header totals:** Sum amounts per currency per bank. Display: `"CHF 48,320 · EUR 3,100"`.
 
 **Post-download:** Show toast `"✓ N invoices archived"` then `window.location = '/'` after 2s.
 
-**Edit modal:** Copy the full modal HTML+JS from `index.html` (Step 6) into `export.html` — do not import/include, just duplicate cleanly. Both pages need the same modal.
+**Card click → edit modal:** calls `window.openModal(jobId)` from `modal.js` — no extra code needed.
 
-**Files changed:** `app/templates/export.html` (new file)
+**Files created:**
+
+| File | Action |
+|------|--------|
+| `app/templates/export.html` | **New** — lean shell with Jinja2 include |
+| `app/static/js/export.js` | **New** — drag-board + download logic |
+
+**Files reused (no changes):** `partials/modal_edit.html`, `main.css`, `modal.js`
+**Files NOT touched (Steps 1–5 complete):** all Python files
 
 ---
 
@@ -470,6 +617,7 @@ a.href = url; a.download = 'pain001_export.zip'; a.click();
 - T8: `pipeline.run_qr()` with mock QR data → correct fields + status=qr_done
 - T9: `pipeline._validate_iban()` — valid CH/DE, invalid, spaces, lowercase
 - T10: LLM JSON parsing — valid JSON, null→"", malformed JSON → returns None
+- T11: `pipeline.run_vendor_check()` — exact match autofills IBAN+BIC, mismatch sets `document_mismatch`, no vendor entry leaves fields unchanged *(add after Step 11 is complete)*
 
 **Files changed:** `app/tests.py`
 
@@ -528,6 +676,183 @@ a.href = url; a.download = 'pain001_export.zip'; a.click();
 
 ---
 
+## Step 11 — Vendor IBAN Lookup (`app/vendors.py` + migrations)
+
+**Recommended model:** `claude-sonnet-4-6` · **Effort: medium** — touches DB migration, a new module, pipeline logic, two existing completed files (pipeline.py, main.py via additive changes only), and UI badges. Cross-cutting enough to need Sonnet's synthesis; effort medium because the spec is tight and files to read are well-defined.
+
+**Context for this session:**
+- [PLAN.md](PLAN.md) — Step 11 spec + Appendix (status flow, DB schema)
+- [Notes/DECISIONS.md](Notes/DECISIONS.md) — sections: "DB Schema: pain.001 Fields Only", "QR Invoices Skip LLM"
+- [Notes/Features.md](Notes/Features.md) — section: "3. Manual LLM Batch Trigger" (vendor check slots in after LLM merge)
+- `app/db.py` — read (completed in Step 1) for `upsert_job`, `get_jobs` signatures
+- `app/pipeline.py` — read (completed in Step 2) for `run_qr` / `run_llm` signatures — add `run_vendor_check()` call, do not modify existing functions
+- `app/main.py` — read (completed in Step 4) — add vendor CRUD routes + `GET /api/vendors` call in pipeline flow, do not remove or modify existing routes
+- `app/static/js/modal.js` — read (completed in Step 6) — understand field coloring contract before adding `iban_source` badge
+- `app/static/js/dashboard.js` — read (completed in Step 6) — understand table row render before adding `iban_source` chip
+
+**Goal:** Add a small `vendors` table mapping receiver names → trusted IBAN + BIC. After every QR/LLM extraction, run a vendor lookup: verify the extracted IBAN against the known IBAN (flag mismatch), or autofill if no IBAN was found. Tag every job's IBAN with its source. Steps 1–6 are complete — additive changes only to those files.
+
+---
+
+### New DB objects (migration, not rewrite)
+
+**New table:**
+```sql
+CREATE TABLE IF NOT EXISTS vendors (
+  id           TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+  receiver_name TEXT NOT NULL,          -- matched case-insensitively against jobs.receiver
+  iban         TEXT NOT NULL,
+  bic          TEXT DEFAULT '',
+  created_at   TEXT DEFAULT (datetime('now')),
+  updated_at   TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_vendors_receiver ON vendors(lower(receiver_name));
+```
+
+**New column on `jobs` table** (ALTER TABLE migration, does not touch Step 1 schema):
+```sql
+ALTER TABLE jobs ADD COLUMN iban_source TEXT DEFAULT '';
+-- values: 'document' | 'database' | 'llm' | 'manual' | ''
+```
+
+Add migration to `db.py` `init_db()` using `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` pattern (SQLite: wrap in try/except `OperationalError`).
+
+---
+
+### New module: `app/vendors.py`
+
+```python
+def lookup(receiver: str) -> dict | None:
+    """
+    Case-insensitive prefix/exact match on vendor receiver_name.
+    Returns {"iban": ..., "bic": ...} or None.
+    """
+
+def upsert_vendor(receiver_name: str, iban: str, bic: str = "") -> None:
+
+def list_vendors() -> list[dict]:
+
+def delete_vendor(vendor_id: str) -> None:
+```
+
+**Matching strategy:** exact match first, then case-insensitive. No fuzzy — false positives on IBAN are a financial risk. Operator must enter the receiver name exactly as it appears in invoices.
+
+---
+
+### New function: `pipeline.run_vendor_check(fields: dict) -> dict`
+
+Called after `run_qr()` or `run_llm()` — never replaces them, always runs after.
+
+```python
+def run_vendor_check(fields: dict) -> dict:
+    """
+    Post-extraction vendor IBAN verification / autofill.
+    Mutates iban_source; never changes status.
+    """
+    vendor = vendors.lookup(fields.get("receiver", ""))
+    if not vendor:
+        return fields                               # no entry → no change
+
+    extracted_iban = fields.get("iban", "")
+
+    if extracted_iban:
+        if extracted_iban == vendor["iban"]:
+            fields["iban_source"] = "document"     # confirmed match
+        else:
+            # Mismatch: flag but do NOT silently overwrite
+            fields["iban_source"] = "document_mismatch"
+            fields["iban_mismatch_db"] = vendor["iban"]   # stored for UI display
+    else:
+        # No IBAN from doc/LLM → autofill from DB
+        fields["iban"] = vendor["iban"]
+        fields["bic"]  = vendor["bic"] or fields.get("bic", "")
+        fields["iban_source"] = "database"
+
+    return fields
+```
+
+**Integration point in pipeline.py** (additive — append calls, do not rewrite existing functions):
+```python
+# In run_qr(), before return:
+fields = run_vendor_check(fields)
+return fields
+
+# In run_llm(), before return:
+merged = run_vendor_check(merged)
+return merged
+```
+
+---
+
+### `iban_source` values
+
+| Value | Meaning | UI display |
+|-------|---------|-----------|
+| `document` | Extracted from PDF, confirmed by vendor DB | green chip "doc ✓" |
+| `document_mismatch` | Extracted from PDF, conflicts with vendor DB | red chip "doc ⚠" — shows DB IBAN in tooltip |
+| `database` | Autofilled from vendor DB (no IBAN in doc) | blue chip "DB" |
+| `llm` | Extracted by LLM, no vendor entry to verify | gray chip "llm" |
+| `manual` | Set by operator in edit modal | gray chip "manual" |
+| `''` | QR-provided, no vendor entry | no chip |
+
+**`document_mismatch` handling:** job is NOT automatically sent to `needs_review` — it stays `LLM-Done` or `QR-processed`. The mismatched IBAN is shown in the edit modal with a red warning ("DB has: CH56...") so the operator can judge. The operator's save action sets `iban_source = 'manual'`.
+
+---
+
+### New API routes (add to `main.py` — do not remove existing routes)
+
+| Method | Path | Action |
+|--------|------|--------|
+| GET | `/api/vendors` | List all vendors |
+| POST | `/api/vendors` | Create vendor `{receiver_name, iban, bic}` |
+| PUT | `/api/vendors/{id}` | Update vendor |
+| DELETE | `/api/vendors/{id}` | Delete vendor |
+
+No dedicated UI page needed — vendor management is accessible from the edit modal ("Add to vendors" button when `iban_source` is empty or `llm`) and from a simple inline table in the dashboard topbar or settings drawer.
+
+---
+
+### UI changes (additive to completed Step 6 files)
+
+**`app/static/js/dashboard.js`** — add `iban_source` chip to table rows:
+- render chip next to IBAN cell based on `job.iban_source`
+- `document_mismatch` → red chip, hover tooltip shows vendor IBAN
+
+**`app/static/js/modal.js`** — in edit modal:
+- Show `iban_source` badge next to IBAN field label
+- If `iban_source === 'document_mismatch'`: show red warning block under IBAN input: `"⚠ Vendor DB has: {iban_mismatch_db} — verify before saving"`
+- "Add to vendors" button (shown when `iban_source ∈ {'llm', ''}` and IBAN is non-empty): calls `POST /api/vendors` with current receiver + IBAN, refreshes source badge to `database`
+
+**`app/templates/partials/modal_edit.html`** — add `iban_source` badge span and mismatch warning `<div>` (hidden by default, shown by `modal.js`).
+
+---
+
+### `iban_mismatch_db` storage
+
+Stored in DB as a separate column (not pain.001 relevant, diagnostic only):
+```sql
+ALTER TABLE jobs ADD COLUMN iban_mismatch_db TEXT DEFAULT '';
+```
+Cleared on operator save (upsert with `iban_mismatch_db = ''`).
+
+---
+
+**Files changed/created:**
+
+| File | Action | Note |
+|------|--------|------|
+| `app/vendors.py` | **New** | Lookup, CRUD, index |
+| `app/db.py` | Additive migration | `ALTER TABLE` for `iban_source`, `iban_mismatch_db`; `vendors` table |
+| `app/pipeline.py` | Additive | `run_vendor_check()` appended; `run_qr`/`run_llm` call it at end |
+| `app/main.py` | Additive | 4 vendor CRUD routes added |
+| `app/static/js/dashboard.js` | Additive | `iban_source` chip in table rows |
+| `app/static/js/modal.js` | Additive | Mismatch warning + "Add to vendors" button |
+| `app/templates/partials/modal_edit.html` | Additive | Badge span + mismatch `<div>` |
+
+**Files NOT touched:** `app/llm.py`, `app/xml_export.py`, `app/qr_swiss.py`, `app/tests.py` (T11 added in Step 8 — see below), all templates except the partial above.
+
+---
+
 ## Step 10 — Integration Testing
 
 **Recommended model:** `claude-sonnet-4-6` · **Effort: medium** — exploratory: must start the app, observe real behavior, adapt when something breaks. Medium effort gives enough thinking budget to diagnose failures without burning Opus-level tokens on what is mostly observation + small fixes. Use `/verify` or `/run` skill.
@@ -541,15 +866,20 @@ a.href = url; a.download = 'pain001_export.zip'; a.click();
 **Goal:** End-to-end smoke test with real PDFs before merging to master.
 
 **Test cases:**
-1. Upload Swiss QR invoice → status=`qr_done`, bank=`BKB`, fields populated
-2. Upload non-QR invoice → status=`needs_llm`
-3. Trigger "Run AI Extraction" → status=`llm_done` or `needs_review`
+1. Upload Swiss QR invoice → status=`QR-processed`, bank=`BKB`, fields populated
+2. Upload non-QR invoice → status=`LLM-Pending`
+3. Trigger "Run AI Extraction" → status=`LLM-Done` or `needs_review`
 4. Open edit modal → Save & Next through 3 invoices
 5. Navigate to `/export` → drag one invoice between columns → bank reassigned
 6. Accept & Download → two XML files downloaded, jobs archived
 7. Return to dashboard → archived jobs not visible in table
 8. CSV export → all expected columns present, archived excluded
-9. DEV_MODE tests T1–T10 pass before container starts
+9. DEV_MODE tests T1–T11 pass before container starts
+10. Add a vendor entry (receiver + IBAN) via `POST /api/vendors`
+11. Upload invoice with matching receiver, no IBAN in PDF → `iban_source=database`, IBAN autofilled
+12. Upload invoice with matching receiver, different IBAN in PDF → `iban_source=document_mismatch`, mismatch warning visible in modal
+13. Upload invoice with matching receiver, same IBAN in PDF → `iban_source=document`, green chip shown
+14. "Add to vendors" button in modal → creates vendor entry, badge updates to `database`
 
 **Merge to master** once all cases pass.
 
@@ -568,9 +898,21 @@ a.href = url; a.download = 'pain001_export.zip'; a.click();
 | `app/llm.py` | Rewrite | 3 |
 | `app/main.py` | Rewrite | 4 |
 | `app/xml_export.py` | Update | 5 |
-| `app/templates/index.html` | Restyle | 6 |
-| `app/templates/export.html` | New file | 7 |
-| `app/tests.py` | Update | 8 |
+| `app/templates/index.html` | Rewrite as lean shell | 6 |
+| `app/templates/partials/modal_edit.html` | New — shared modal partial | 6 |
+| `app/static/css/main.css` | New — all CSS + Lyfegen tokens | 6 |
+| `app/static/js/dashboard.js` | New — table polling + actions | 6 |
+| `app/static/js/modal.js` | New — modal lifecycle | 6 |
+| `app/templates/export.html` | New — lean shell with Jinja2 include | 7 |
+| `app/static/js/export.js` | New — drag-board + download logic | 7 |
+| `app/tests.py` | Update (T11 after Step 11) | 8 |
+| `app/vendors.py` | **New** — vendor lookup + CRUD | 11 |
+| `app/db.py` | Additive migration (`iban_source`, `iban_mismatch_db`, `vendors` table) | 11 |
+| `app/pipeline.py` | Additive (`run_vendor_check` + calls) | 11 |
+| `app/main.py` | Additive (4 vendor routes) | 11 |
+| `app/static/js/dashboard.js` | Additive (`iban_source` chip) | 11 |
+| `app/static/js/modal.js` | Additive (mismatch warning + "Add to vendors") | 11 |
+| `app/templates/partials/modal_edit.html` | Additive (badge span + mismatch div) | 11 |
 | `requirements.txt` | Update | 9 |
 | `Dockerfile` | Update | 9 |
 | `.env.example` | Update | 9 |

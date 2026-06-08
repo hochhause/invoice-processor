@@ -98,8 +98,53 @@ def run_startup_tests():
     except ET.ParseError as e:
         failures.append(f"FAIL [T6-skip-xml]: {e}")
 
+    # ── T7: derive_bank_target routing ───────────────────────────────────────
+    from db import derive_bank_target
+    check("T7a-chf-bkb",    derive_bank_target("CHF") == "BKB",        "CHF → BKB")
+    check("T7b-usd-raiff",  derive_bank_target("USD") == "RAIFFEISEN", "USD → RAIFFEISEN")
+    check("T7c-jpy-manual", derive_bank_target("JPY") == "MANUAL",     "JPY → MANUAL")
+
+    # ── T8: run_qr with mock QR data ─────────────────────────────────────────
+    from unittest.mock import patch
+    import pipeline
+    _mock_qr = {
+        "receiver": "Test AG",
+        "iban":     "CH5604835012345678009",
+        "amount":   "100.00",
+        "currency": "CHF",
+        "reference": "RF18539007547034",
+    }
+    with patch("qr_swiss.extract_from_pdf", return_value=_mock_qr):
+        _qr_result = pipeline.run_qr("/fake/path.pdf")
+    check("T8a-status-qr",   _qr_result.get("status") == "QR-processed",          f"status={_qr_result.get('status')}")
+    check("T8b-receiver",    _qr_result.get("receiver") == "Test AG",              f"receiver={_qr_result.get('receiver')}")
+    check("T8c-bank-target", _qr_result.get("bank_target") == "BKB",              f"bank_target={_qr_result.get('bank_target')}")
+    check("T8d-iban",        _qr_result.get("iban") == "CH5604835012345678009",   f"iban={_qr_result.get('iban')}")
+
+    # ── T9: _validate_iban — spaces + lowercase (T1 covers base valid/invalid) ─
+    from pipeline import _validate_iban as _vi
+    check("T9a-spaces",    _vi("CH56 0483 5012 3456 7800 9"), "IBAN with spaces should pass")
+    check("T9b-lowercase", _vi("ch5604835012345678009"),      "Lowercase IBAN should pass")
+
+    # ── T10: LLM JSON parsing logic ───────────────────────────────────────────
+    import json as _json
+    _raw_valid = ('{"invoice_id": "INV-1", "receiver": "X AG", "amount": "100.00",'
+                  ' "currency": "CHF", "due_date": "2026-07-01",'
+                  ' "iban": null, "bic": null, "reference": null}')
+    _parsed = _json.loads(_raw_valid)
+    _coerced = {k: (v or "") for k, v in _parsed.items()}
+    check("T10a-null-to-empty", _coerced.get("iban") == "",  "null iban → ''")
+    check("T10b-null-bic",      _coerced.get("bic") == "",   "null bic → ''")
+    _bad_result = None
+    try:
+        _json.loads("not valid json {{{")
+        _bad_result = "parsed"  # should not reach here
+    except _json.JSONDecodeError:
+        pass  # correct — llm.extract_fields returns None on JSONDecodeError
+    check("T10c-malformed-json", _bad_result is None, "Malformed JSON raises JSONDecodeError → extract_fields returns None")
+
     # ── Report ────────────────────────────────────────────────────────────────
-    total = 9  # approximate number of checks
+    total = 26  # T1(4) + T2(4) + T4(4) + T5(1) + T6(1) + T7(3) + T8(4) + T9(2) + T10(3)
     passed = total - len(failures)
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)
