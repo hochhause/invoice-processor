@@ -24,6 +24,8 @@
   <button class="btn btn-ai" id="btn-run-ai" onclick="runAiBatch()" style="display:none">
     ✦ Run AI Extraction
   </button>
+  <button class="btn btn-ghost" onclick="showAnalytics()">Analytics</button>
+  <button class="btn btn-ghost" onclick="showVendors()">Vendors</button>
   <button class="btn btn-ghost" onclick="window.location='/export'">Export →</button>
   <button class="btn btn-ghost" style="color:var(--red);border-color:rgba(239,68,68,.3)" onclick="clearAll()" title="Delete all">Clear all</button>
 </div>
@@ -62,7 +64,83 @@
 
 {% include 'partials/modal_edit.html' %}
 
+<!-- Vendor DB Modal -->
+<div id="vendors-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeVendors()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:24px;width:min(680px,96vw);max-height:80vh;display:flex;flex-direction:column;gap:0">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0;font-size:16px;font-weight:600">Vendor IBAN Database</h2>
+      <button onclick="closeVendors()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-dim);line-height:1">×</button>
+    </div>
+    <div style="overflow-y:auto;flex:1">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500">Receiver</th>
+            <th style="text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500">IBAN</th>
+            <th style="text-align:left;padding:6px 8px;color:var(--text-dim);font-weight:500;width:90px">BIC</th>
+            <th style="width:72px"></th>
+          </tr>
+        </thead>
+        <tbody id="vendor-rows"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:flex-end">
+      <div style="flex:1.2">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">Receiver</div>
+        <input id="va-receiver" type="text" placeholder="Company AG" style="width:100%;box-sizing:border-box">
+      </div>
+      <div style="flex:1.5">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">IBAN</div>
+        <input id="va-iban" type="text" placeholder="CH…" style="width:100%;box-sizing:border-box">
+      </div>
+      <div style="width:100px">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">BIC</div>
+        <input id="va-bic" type="text" placeholder="optional" style="width:100%;box-sizing:border-box">
+      </div>
+      <button class="btn btn-primary" onclick="addVendorRow()" style="white-space:nowrap">+ Add</button>
+    </div>
+  </div>
+</div>
+
+<div id="analytics-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:24px;min-width:360px;max-width:480px;width:100%">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="margin:0;font-size:16px;font-weight:600">Extraction Analytics</h2>
+      <button onclick="document.getElementById('analytics-modal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-dim);line-height:1">×</button>
+    </div>
+    <div id="analytics-body" style="font-size:13px">Loading…</div>
+  </div>
+</div>
+
 <script src="/static/js/modal.js"></script>
 <script src="/static/js/dashboard.js"></script>
+<script src="/static/js/vendors.js"></script>
+<script>
+async function showAnalytics() {
+  const modal = document.getElementById('analytics-modal');
+  modal.style.display = 'flex';
+  const body = document.getElementById('analytics-body');
+  body.textContent = 'Loading…';
+  try {
+    const d = await fetch('/api/analytics').then(r => r.json());
+    const rows = [
+      ['Total Processed', d.total_processed, null],
+      ['QR Matches',      d.qr_matches.count,  d.qr_matches.pct],
+      ['Text-Full',       d.text_full.count,   d.text_full.pct],
+      ['Hybrid',          d.hybrid.count,      d.hybrid.pct],
+      ['Image-Only',      d.image_only.count,  d.image_only.pct],
+      ['Incomplete',      d.incomplete.count,  d.incomplete.pct],
+    ];
+    body.innerHTML = rows.map(([label, count, pct], i) =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${i < rows.length-1 ? 'border-bottom:1px solid var(--border)' : ''}">
+        <span style="color:var(--text-dim)">${label}</span>
+        <span><strong>${count}</strong>${pct != null ? ' <span style="color:var(--text-dim);font-size:11px">· ' + pct + '%</span>' : ''}</span>
+      </div>`
+    ).join('');
+  } catch {
+    body.textContent = 'Failed to load analytics.';
+  }
+}
+</script>
 </body>
 </html>

@@ -87,8 +87,11 @@ function _updateIbanSource(job) {
   }
 
   if (addVendorBtn) {
-    const showAdd = (!job.iban_source || job.iban_source === 'llm') && job.iban;
+    const src = job.iban_source || '';
+    const alreadyKnown = src === 'document' || src === 'database';
+    const showAdd = !alreadyKnown && job.iban;
     addVendorBtn.style.display = showAdd ? '' : 'none';
+    addVendorBtn.textContent = src === 'document_mismatch' ? '↑ Update vendor IBAN' : '+ Save to vendors';
   }
 }
 

@@ -32,30 +32,66 @@ def run_qr(pdf_path: str) -> dict:
     return fields
 
 
-def run_llm(pdf_path: str, existing_fields: dict) -> dict:
-    """Run LLM extraction. Merges into existing_fields — QR fields win. Called from /api/run-llm-batch."""
-    llm_fields = llm.extract_fields(pdf_path)
+_MANDATORY = ["receiver", "iban", "amount", "currency"]
 
-    if llm_fields is None:
-        result = {**existing_fields, "status": "needs_review"}
+
+def run_llm(pdf_path: str, existing_fields: dict) -> dict:
+    """Staged LLM extraction with vendor check between stages.
+
+    Flow: text LLM → vendor check → skip image if complete → image LLM → vendor check.
+    QR/existing fields always win over LLM output.
+    """
+    # ── Stage 1: text LLM ────────────────────────────────────────────────────
+    text_fields = llm.extract_text_stage(pdf_path)
+
+    # Interim: QR/existing wins over text, then vendor check
+    interim = {**(text_fields or {}), **{k: v for k, v in existing_fields.items() if v}}
+    interim = run_vendor_check(interim)
+
+    # ── Stage 2: image LLM (skipped if text + vendor already complete) ────────
+    needs_image = any(not interim.get(f) for f in _MANDATORY)
+    image_fields = llm.extract_image_stage(pdf_path) if needs_image else None
+
+    # Both stages failed
+    if text_fields is None and image_fields is None:
+        result = {**existing_fields, "status": "needs_review", "match_type": "image_only"}
         result = run_vendor_check(result)
         return result
 
-    # QR-extracted fields win over LLM
-    merged = {**llm_fields, **{k: v for k, v in existing_fields.items() if v}}
+    # ── Match type ────────────────────────────────────────────────────────────
+    if text_fields and image_fields:
+        match_type = "hybrid"
+    elif text_fields:
+        match_type = "text_full"
+    else:
+        match_type = "image_only"
+
+    # ── Final merge: image < text (non-null) < QR/existing ───────────────────
+    merged = {**(image_fields or {})}
+    if text_fields:
+        merged.update({k: v for k, v in text_fields.items() if v is not None})
+    merged.update({k: v for k, v in existing_fields.items() if v})
+
+    # Carry forward vendor-autofilled IBAN from text stage (absent in raw text_fields)
+    if not merged.get("iban") and interim.get("iban"):
+        merged["iban"] = interim["iban"]
+        if not merged.get("bic") and interim.get("bic"):
+            merged["bic"] = interim["bic"]
+
+    merged["match_type"] = match_type
     merged["bank_target"] = db.derive_bank_target(merged.get("currency", ""))
 
     if merged.get("iban") and not _validate_iban(merged["iban"]):
         merged["iban"] = ""
 
-    # Tag IBAN source before vendor check: LLM-provided if QR didn't have it
-    if not existing_fields.get("iban") and merged.get("iban"):
+    # Tag LLM-sourced IBAN (not from QR, not yet vendor-tagged)
+    if not existing_fields.get("iban") and merged.get("iban") and not merged.get("iban_source"):
         merged["iban_source"] = "llm"
 
-    mandatory = ["receiver", "iban", "amount", "currency"]
-    merged["status"] = "LLM-Done" if all(merged.get(f) for f in mandatory) else "needs_review"
-
+    # ── Final vendor check (image may have resolved receiver) ────────────────
     merged = run_vendor_check(merged)
+
+    merged["status"] = "LLM-Done" if all(merged.get(f) for f in _MANDATORY) else "needs_review"
     return merged
 
 

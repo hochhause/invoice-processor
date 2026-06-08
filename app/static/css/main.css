@@ -285,6 +285,16 @@ body.drag-active::after {
 
 .btn-sm { padding: 3px 10px; font-size: 11px; }
 
+/* ── VENDOR TABLE ────────────────────────────────────────────────────── */
+.vendor-row { border-bottom: 1px solid var(--border); }
+.vendor-row:last-child { border-bottom: none; }
+.vendor-cell { padding: 8px; }
+.vendor-iban { font-family: monospace; font-size: 12px; }
+.vendor-bic  { color: var(--text-dim); }
+.vendor-actions { text-align: right; white-space: nowrap; }
+.vendor-input { width: 100%; box-sizing: border-box; }
+.vendor-empty { padding: 20px 8px; color: var(--text-dim); text-align: center; }
+
 /* ── MODAL ───────────────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed;

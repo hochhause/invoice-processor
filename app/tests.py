@@ -8,6 +8,9 @@ import sys
 
 
 def run_startup_tests():
+    import db as _db
+    _db.init_db()
+
     failures = []
 
     def check(name, condition, detail=""):

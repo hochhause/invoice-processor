@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     bank_target      TEXT DEFAULT '',
     iban_source      TEXT DEFAULT '',
     iban_mismatch_db TEXT DEFAULT '',
+    match_type       TEXT DEFAULT '',
     created_at       TEXT DEFAULT (datetime('now')),
     updated_at       TEXT DEFAULT (datetime('now'))
 );
@@ -64,15 +65,13 @@ def init_db():
         for col_def in [
             "ALTER TABLE jobs ADD COLUMN iban_source TEXT DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN iban_mismatch_db TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN match_type TEXT DEFAULT ''",
         ]:
             try:
                 conn.execute(col_def)
             except sqlite3.OperationalError:
                 pass  # column already exists
 
-        # Wipe existing jobs (testing data)
-        conn.execute("DELETE FROM jobs")
-        print("[db] Cleared all test job data", flush=True)
 
 
 def derive_bank_target(currency: str) -> str:

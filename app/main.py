@@ -50,7 +50,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PERSIST_KEYS = {
     "receiver", "iban", "bic", "amount", "currency",
     "reference", "invoice_id", "bank_target", "status",
-    "iban_source", "iban_mismatch_db",
+    "iban_source", "iban_mismatch_db", "match_type",
 }
 # Editable fields accepted by the review form.
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency",
@@ -250,6 +250,41 @@ async def clear_all_jobs():
 
 
 # ── Vendors ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/analytics")
+async def analytics():
+    with db.get_db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status NOT IN ('LLM-Pending', 'error')"
+        ).fetchone()[0]
+        qr_count = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'QR-processed'"
+        ).fetchone()[0]
+        text_full = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE match_type = 'text_full'"
+        ).fetchone()[0]
+        hybrid = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE match_type = 'hybrid'"
+        ).fetchone()[0]
+        image_only = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE match_type = 'image_only'"
+        ).fetchone()[0]
+        incomplete = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'needs_review'"
+        ).fetchone()[0]
+
+    def pct(n):
+        return round(n / total * 100, 1) if total else 0.0
+
+    return JSONResponse({
+        "total_processed": total,
+        "qr_matches":  {"count": qr_count,   "pct": pct(qr_count)},
+        "text_full":   {"count": text_full,   "pct": pct(text_full)},
+        "hybrid":      {"count": hybrid,      "pct": pct(hybrid)},
+        "image_only":  {"count": image_only,  "pct": pct(image_only)},
+        "incomplete":  {"count": incomplete,  "pct": pct(incomplete)},
+    })
+
 
 @app.get("/api/vendors")
 async def list_vendors_route():
