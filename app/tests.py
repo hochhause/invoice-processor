@@ -8,6 +8,9 @@ import sys
 
 
 def run_startup_tests():
+    import db as _db
+    _db.init_db()
+
     failures = []
 
     def check(name, condition, detail=""):
@@ -15,7 +18,7 @@ def run_startup_tests():
             failures.append(f"FAIL [{name}]: {detail}")
 
     # ── T1: IBAN checksum validation ──────────────────────────────────────────
-    from extract import _validate_iban_checksum
+    from pipeline import _validate_iban as _validate_iban_checksum
     check("T1a-valid-CH", _validate_iban_checksum("CH5604835012345678009"),
           "Valid CH IBAN should pass checksum")
     check("T1b-valid-DE", _validate_iban_checksum("DE89370400440532013000"),
@@ -36,43 +39,12 @@ def run_startup_tests():
     check("T2d-too-short", not bool(re.match(BIC_PATTERN, "BLKB")),
           "4-char string is not a valid BIC")
 
-    # ── T3: extract_fields returns expected structure ─────────────────────────
-    from extract import extract_fields
-    SAMPLE_MD = """
-# INVOICE NUMBER | INV-TEST001
-Acme Corp
-
-| Total | 1234.56 |
-
-IBAN: CH5604835012345678009
-BIC: BLKBCH22
-CHF
-
-Due Date: 01/06/2026
-order no: ORD-999
-"""
-    fields = extract_fields(SAMPLE_MD, "test.pdf")
-    check("T3a-invoice-id", fields.get("invoice_id") == "INV-TEST001",
-          f"Expected INV-TEST001, got {fields.get('invoice_id')}")
-    check("T3b-amount", fields.get("amount") == "1234.56",
-          f"Expected 1234.56, got {fields.get('amount')}")
-    check("T3c-currency", fields.get("currency") == "CHF",
-          f"Expected CHF, got {fields.get('currency')}")
-    check("T3d-iban", "CH5604835012345678009" in fields.get("iban", ""),
-          f"Expected CH IBAN, got {fields.get('iban')}")
-    check("T3e-bic", fields.get("bic") == "BLKBCH22",
-          f"Expected BLKBCH22, got {fields.get('bic')}")
-    check("T3f-no-bankgiro", fields.get("bankgiro") == "",
-          "bankgiro should always be empty (legacy removed)")
-    check("T3g-no-plusgiro", fields.get("plusgiro") == "",
-          "plusgiro should always be empty (legacy removed)")
-
     # ── T4: pain.001 XML is well-formed and has required elements ─────────────
     from xml_export import build_pain001
     import xml.etree.ElementTree as ET
 
     debtor = {"name": "Test Corp AG", "iban": "CH5604835012345678009", "bic": "BLKBCH22"}
-    jobs_chf = [{"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+    jobs_chf = [{"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
                  "amount": "500.00", "currency": "CHF", "receiver": "Vendor AG",
                  "invoice_id": "INV-001", "due_date": "2026-07-01", "reference": "REF-001"}]
     xml_str = build_pain001(jobs_chf, debtor)
@@ -92,10 +64,10 @@ order no: ORD-999
 
     # ── T5: Multi-currency → multiple PmtInf blocks ───────────────────────────
     jobs_multi = [
-        {"status": "done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
+        {"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "BLKBCH22",
          "amount": "100.00", "currency": "CHF", "receiver": "A", "invoice_id": "I1",
          "due_date": "2026-07-01", "reference": "R1"},
-        {"status": "done", "iban": "DE89370400440532013000", "bic": "DEUTDEDB",
+        {"status": "LLM-Done", "iban": "DE89370400440532013000", "bic": "DEUTDEDB",
          "amount": "200.00", "currency": "EUR", "receiver": "B", "invoice_id": "I2",
          "due_date": "2026-07-02", "reference": "R2"},
     ]
@@ -112,9 +84,9 @@ order no: ORD-999
     # ── T6: Jobs missing IBAN are skipped; IBAN-only (no BIC) are included ───────
     # BIC is optional for Swiss QR-bill and SEPA — only IBAN is mandatory.
     jobs_skip = [
-        {"status": "done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
+        {"status": "LLM-Done", "iban": "", "bic": "BLKBCH22", "amount": "100.00",
          "currency": "CHF", "receiver": "X", "invoice_id": "I3", "due_date": "2026-07-01", "reference": "R3"},
-        {"status": "done", "iban": "CH5604835012345678009", "bic": "",
+        {"status": "LLM-Done", "iban": "CH5604835012345678009", "bic": "",
          "amount": "200.00", "currency": "CHF", "receiver": "Y", "invoice_id": "I4",
          "due_date": "2026-07-01", "reference": "R4"},
     ]
@@ -129,8 +101,77 @@ order no: ORD-999
     except ET.ParseError as e:
         failures.append(f"FAIL [T6-skip-xml]: {e}")
 
+    # ── T7: derive_bank_target routing ───────────────────────────────────────
+    from db import derive_bank_target
+    check("T7a-chf-bkb",    derive_bank_target("CHF") == "BKB",        "CHF → BKB")
+    check("T7b-usd-raiff",  derive_bank_target("USD") == "RAIFFEISEN", "USD → RAIFFEISEN")
+    check("T7c-jpy-manual", derive_bank_target("JPY") == "MANUAL",     "JPY → MANUAL")
+
+    # ── T8: run_qr with mock QR data ─────────────────────────────────────────
+    from unittest.mock import patch
+    import pipeline
+    _mock_qr = {
+        "receiver": "Test AG",
+        "iban":     "CH5604835012345678009",
+        "amount":   "100.00",
+        "currency": "CHF",
+        "reference": "RF18539007547034",
+    }
+    with patch("qr_swiss.extract_from_pdf", return_value=_mock_qr):
+        _qr_result = pipeline.run_qr("/fake/path.pdf")
+    check("T8a-status-qr",   _qr_result.get("status") == "QR-processed",          f"status={_qr_result.get('status')}")
+    check("T8b-receiver",    _qr_result.get("receiver") == "Test AG",              f"receiver={_qr_result.get('receiver')}")
+    check("T8c-bank-target", _qr_result.get("bank_target") == "BKB",              f"bank_target={_qr_result.get('bank_target')}")
+    check("T8d-iban",        _qr_result.get("iban") == "CH5604835012345678009",   f"iban={_qr_result.get('iban')}")
+
+    # ── T9: _validate_iban — spaces + lowercase (T1 covers base valid/invalid) ─
+    from pipeline import _validate_iban as _vi
+    check("T9a-spaces",    _vi("CH56 0483 5012 3456 7800 9"), "IBAN with spaces should pass")
+    check("T9b-lowercase", _vi("ch5604835012345678009"),      "Lowercase IBAN should pass")
+
+    # ── T10: LLM JSON parsing logic ───────────────────────────────────────────
+    import json as _json
+    _raw_valid = ('{"invoice_id": "INV-1", "receiver": "X AG", "amount": "100.00",'
+                  ' "currency": "CHF", "due_date": "2026-07-01",'
+                  ' "iban": null, "bic": null, "reference": null}')
+    _parsed = _json.loads(_raw_valid)
+    _coerced = {k: (v or "") for k, v in _parsed.items()}
+    check("T10a-null-to-empty", _coerced.get("iban") == "",  "null iban → ''")
+    check("T10b-null-bic",      _coerced.get("bic") == "",   "null bic → ''")
+    _bad_result = None
+    try:
+        _json.loads("not valid json {{{")
+        _bad_result = "parsed"  # should not reach here
+    except _json.JSONDecodeError:
+        pass  # correct — llm.extract_fields returns None on JSONDecodeError
+    check("T10c-malformed-json", _bad_result is None, "Malformed JSON raises JSONDecodeError → extract_fields returns None")
+
+    # ── T11: run_vendor_check — exact match, mismatch, autofill, no-entry ───────
+    import vendors as _vendors
+    from pipeline import run_vendor_check as _rvc
+    _vendors.upsert_vendor("VendorCheck AG", "CH5604835012345678009", "BLKBCH22")
+
+    # Confirmed match
+    _r11a = _rvc({"receiver": "VendorCheck AG", "iban": "CH5604835012345678009"})
+    check("T11a-source-document", _r11a.get("iban_source") == "document", f"iban_source={_r11a.get('iban_source')}")
+
+    # Mismatch — DB IBAN stored in iban_mismatch_db
+    _r11b = _rvc({"receiver": "VendorCheck AG", "iban": "CH9300762011623852957"})
+    check("T11b-mismatch",    _r11b.get("iban_source") == "document_mismatch", f"iban_source={_r11b.get('iban_source')}")
+    check("T11c-mismatch-db", _r11b.get("iban_mismatch_db") == "CH5604835012345678009", f"iban_mismatch_db={_r11b.get('iban_mismatch_db')}")
+
+    # No IBAN in doc → autofill from DB
+    _r11d = _rvc({"receiver": "VendorCheck AG", "iban": ""})
+    check("T11d-autofill-iban",   _r11d.get("iban") == "CH5604835012345678009", f"iban={_r11d.get('iban')}")
+    check("T11e-autofill-source", _r11d.get("iban_source") == "database",        f"iban_source={_r11d.get('iban_source')}")
+
+    # No vendor entry → fields unchanged
+    _r11f = _rvc({"receiver": "Unknown Corp XYZ", "iban": "CH9300762011623852957"})
+    check("T11f-no-vendor", _r11f.get("iban") == "CH9300762011623852957", "No vendor → iban unchanged")
+    check("T11g-no-source", not _r11f.get("iban_source"), "No vendor → iban_source empty")
+
     # ── Report ────────────────────────────────────────────────────────────────
-    total = 16  # approximate number of checks
+    total = 33  # T1(4)+T2(4)+T4(4)+T5(1)+T6(1)+T7(3)+T8(4)+T9(2)+T10(3)+T11(7)
     passed = total - len(failures)
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)

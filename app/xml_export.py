@@ -20,15 +20,31 @@ _NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
 _XSI = "http://www.w3.org/2001/XMLSchema-instance"
 _SCHEMA_LOC = f"{_NS} pain.001.001.03.xsd"
 
-# Service-level code by currency
-_SVC_LVL = {
-    "EUR": "SEPA",   # SEPA Credit Transfer
-    "CHF": "NURG",   # Swiss domestic, no urgency
-}
-_DEFAULT_SVC_LVL = "NURG"
+# Service levels removed — now determined by _get_service_level(ccy, bank)
 
-# Local instrument for cross-border (non-CHF, non-EUR)
-_CROSS_BORDER_CURRENCIES = frozenset(["GBP", "USD", "JPY", "AUD", "CAD", "DKK", "NOK", "SEK", "CNY"])
+
+def _get_service_level(ccy: str, bank: str) -> tuple[str, bool]:
+    """
+    Determine service level code and whether to add SWIFT local instrument.
+    Returns: (service_level_code, should_add_swift)
+    """
+    if bank == "BKB":
+        if ccy == "CHF":
+            return ("NURG", False)
+        elif ccy == "SEK":
+            return ("NURG", True)
+        elif ccy == "EUR":
+            return ("SEPA", False)
+        else:
+            return ("NURG", False)
+    elif bank == "RAIFFEISEN":
+        if ccy in ("USD", "CAD", "GBP"):
+            return ("NURG", True)
+        else:
+            return ("NURG", False)
+    else:
+        # MANUAL or unknown bank
+        return ("NURG", False)
 
 
 def _sub(parent, tag, text=None):
@@ -38,26 +54,34 @@ def _sub(parent, tag, text=None):
     return el
 
 
-def build_pain001(jobs: list[dict], debtor: dict) -> str:
+def build_pain001(jobs: list[dict], debtor: dict, bank: str = None) -> str:
     """
     Build pain.001.001.03 XML from a list of job dicts.
 
     Args:
         jobs: list of job dicts from db.get_all_jobs()
         debtor: dict with keys 'name', 'iban', 'bic'
+        bank: optional filter by bank_target ("BKB" | "RAIFFEISEN" | "MANUAL")
 
     Returns:
         UTF-8 XML string
+
+    Raises:
+        ValueError: if no payable jobs after filtering
     """
     # Filter: only done jobs with at least an IBAN (BIC optional for Swiss QR)
     payable = [
         j for j in jobs
-        if j.get("status") == "done"
+        if j.get("status") in ("QR-processed", "LLM-Done")
         and j.get("iban", "").strip()
     ]
 
+    # Filter by bank_target if bank specified
+    if bank:
+        payable = [j for j in payable if j.get("bank_target") == bank]
+
     if not payable:
-        return _empty_pain001(debtor)
+        raise ValueError(f"No payable jobs (bank={bank})")
 
     now = datetime.now(timezone.utc)
     msg_id = f"LYFE{now.strftime('%Y%m%d%H%M%S')}"
@@ -93,8 +117,6 @@ def build_pain001(jobs: list[dict], debtor: dict) -> str:
     for idx, (ccy, txs) in enumerate(by_currency.items()):
         pmt_sum = sum(_parse_amount(j.get("amount", "0")) for j in txs)
         earliest = _earliest_date(txs)
-        is_sepa = ccy == "EUR"
-        is_cross_border = ccy in _CROSS_BORDER_CURRENCIES
 
         pmt = _sub(cti, "PmtInf")
         _sub(pmt, "PmtInfId", f"{msg_id}-{idx+1:02d}")
@@ -104,8 +126,9 @@ def build_pain001(jobs: list[dict], debtor: dict) -> str:
 
         pmt_tp = _sub(pmt, "PmtTpInf")
         svc = _sub(pmt_tp, "SvcLvl")
-        _sub(svc, "Cd", _SVC_LVL.get(ccy, _DEFAULT_SVC_LVL))
-        if is_cross_border:
+        svc_level, add_swift = _get_service_level(ccy, bank or "BKB")
+        _sub(svc, "Cd", svc_level)
+        if add_swift:
             lcl = _sub(pmt_tp, "LclInstrm")
             _sub(lcl, "Cd", "SWIFT")
 
@@ -193,17 +216,3 @@ def _earliest_date(jobs: list[dict]) -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _empty_pain001(debtor: dict) -> str:
-    now = datetime.now(timezone.utc)
-    root = ET.Element("Document", {"xmlns": _NS})
-    cti = _sub(root, "CstmrCdtTrfInitn")
-    grp = _sub(cti, "GrpHdr")
-    _sub(grp, "MsgId", f"LYFE{now.strftime('%Y%m%d%H%M%S')}")
-    _sub(grp, "CreDtTm", now.strftime("%Y-%m-%dT%H:%M:%SZ"))
-    _sub(grp, "NbOfTxs", 0)
-    _sub(grp, "CtrlSum", "0.00")
-    initg = _sub(grp, "InitgPty")
-    _sub(initg, "Nm", debtor.get("name", "Unknown")[:140])
-    ET.indent(root, space="  ")
-    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
-    return f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}'
