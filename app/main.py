@@ -40,6 +40,7 @@ from fastapi.templating import Jinja2Templates
 
 import db
 import pipeline
+import vendors as vendors_mod
 import xml_export
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
@@ -49,6 +50,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PERSIST_KEYS = {
     "receiver", "iban", "bic", "amount", "currency",
     "reference", "invoice_id", "bank_target", "status",
+    "iban_source", "iban_mismatch_db",
 }
 # Editable fields accepted by the review form.
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency",
@@ -195,6 +197,10 @@ async def save_review(job_id: str, request: Request):
         fields["status"] = "needs_review"
     # else: leave existing status untouched (e.g. QR-processed stays as-is)
 
+    # Operator save = manual IBAN source; clear mismatch flag
+    fields["iban_source"] = "manual"
+    fields["iban_mismatch_db"] = ""
+
     db.upsert_job(job_id, **fields)
     return JSONResponse({"ok": True})
 
@@ -240,6 +246,37 @@ async def clear_all_jobs():
         for f in UPLOAD_DIR.glob(f"{job['id']}_*"):
             f.unlink(missing_ok=True)
     db.clear_non_archived()
+    return JSONResponse({"ok": True})
+
+
+# ── Vendors ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/vendors")
+async def list_vendors_route():
+    return vendors_mod.list_vendors()
+
+
+@app.post("/api/vendors")
+async def create_vendor(request: Request):
+    data = await request.json()
+    if not data.get("receiver_name") or not data.get("iban"):
+        return JSONResponse({"error": "receiver_name and iban required"}, status_code=400)
+    vendors_mod.upsert_vendor(data["receiver_name"], data["iban"], data.get("bic", ""))
+    return JSONResponse({"ok": True})
+
+
+@app.put("/api/vendors/{vendor_id}")
+async def update_vendor(vendor_id: str, request: Request):
+    data = await request.json()
+    if not data.get("receiver_name") or not data.get("iban"):
+        return JSONResponse({"error": "receiver_name and iban required"}, status_code=400)
+    vendors_mod.update_vendor(vendor_id, data["receiver_name"], data["iban"], data.get("bic", ""))
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/vendors/{vendor_id}")
+async def delete_vendor_route(vendor_id: str):
+    vendors_mod.delete_vendor(vendor_id)
     return JSONResponse({"ok": True})
 
 

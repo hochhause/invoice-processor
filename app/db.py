@@ -6,20 +6,33 @@ DB_PATH = os.environ.get("DB_PATH", "/app/data/invoices.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
-    id           TEXT PRIMARY KEY,
-    filename     TEXT NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'LLM-Pending',
-    receiver     TEXT DEFAULT '',
-    iban         TEXT DEFAULT '',
-    bic          TEXT DEFAULT '',
-    amount       TEXT DEFAULT '',
-    currency     TEXT DEFAULT '',
-    reference    TEXT DEFAULT '',
-    invoice_id   TEXT DEFAULT '',
-    bank_target  TEXT DEFAULT '',
-    created_at   TEXT DEFAULT (datetime('now')),
-    updated_at   TEXT DEFAULT (datetime('now'))
+    id               TEXT PRIMARY KEY,
+    filename         TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'LLM-Pending',
+    receiver         TEXT DEFAULT '',
+    iban             TEXT DEFAULT '',
+    bic              TEXT DEFAULT '',
+    amount           TEXT DEFAULT '',
+    currency         TEXT DEFAULT '',
+    reference        TEXT DEFAULT '',
+    invoice_id       TEXT DEFAULT '',
+    bank_target      TEXT DEFAULT '',
+    iban_source      TEXT DEFAULT '',
+    iban_mismatch_db TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now')),
+    updated_at       TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS vendors (
+    id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    receiver_name TEXT NOT NULL,
+    iban          TEXT NOT NULL,
+    bic           TEXT DEFAULT '',
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_receiver ON vendors(lower(receiver_name));
 """
 
 STATUS_ENUM = {'QR-processed', 'LLM-Pending', 'LLM-Done', 'needs_review', 'archived', 'error'}
@@ -40,14 +53,22 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with get_db() as conn:
         conn.executescript(SCHEMA)
-        # Migration: drop old tables if they exist
+
+        # Migration: drop legacy tables
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        if 'vendors' in tables:
-            conn.execute("DROP TABLE vendors")
-            print("[db] Dropped legacy vendors table", flush=True)
         if 'whitelist' in tables:
             conn.execute("DROP TABLE whitelist")
             print("[db] Dropped legacy whitelist table", flush=True)
+
+        # Migration: add Step 11 columns to existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS)
+        for col_def in [
+            "ALTER TABLE jobs ADD COLUMN iban_source TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN iban_mismatch_db TEXT DEFAULT ''",
+        ]:
+            try:
+                conn.execute(col_def)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
         # Wipe existing jobs (testing data)
         conn.execute("DELETE FROM jobs")

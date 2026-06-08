@@ -121,7 +121,7 @@ function buildRow(job, idx) {
     <td class="cell-receiver" title="${esc(job.receiver || '')}">${esc(job.receiver || '')}</td>
     <td class="cell-amount">${esc(job.amount || '')}</td>
     <td class="cell-currency">${esc(job.currency || '')}</td>
-    <td class="cell-iban">${esc(job.iban || '')}</td>
+    <td class="cell-iban">${esc(job.iban || '')} ${ibanSourceChip(job.iban_source || '', job.iban_mismatch_db || '')}</td>
     <td>${bankChip(job.bank_target || '')}</td>
     <td class="cell-actions">
       <button class="btn-icon" title="Edit" onclick="openModal('${job.id}', ${idx}, ${(window._jobsCache || []).length})">✎</button>
@@ -141,6 +141,20 @@ function statusBadge(status) {
   };
   const [cls, label] = map[status] || ['badge-archived', status];
   return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function ibanSourceChip(source, mismatchDb) {
+  const map = {
+    'document':          ['chip-iban-doc',     'doc ✓'],
+    'document_mismatch': ['chip-iban-mismatch', 'doc ⚠'],
+    'database':          ['chip-iban-db',       'DB'],
+    'llm':               ['chip-iban-llm',      'llm'],
+    'manual':            ['chip-iban-manual',   'manual'],
+  };
+  if (!source || !map[source]) return '';
+  const [cls, label] = map[source];
+  const title = source === 'document_mismatch' && mismatchDb ? `DB has: ${mismatchDb}` : source;
+  return `<span class="chip ${cls}" title="${esc(title)}">${label}</span>`;
 }
 
 function bankChip(bank) {

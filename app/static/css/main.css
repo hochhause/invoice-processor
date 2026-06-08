@@ -266,6 +266,25 @@ body.drag-active::after {
 .chip-raiff { background: rgba(6,78,59,.4); color: #6ee7b7; }
 .chip-manual { background: rgba(120,53,15,.4); color: #fcd34d; }
 
+/* ── IBAN SOURCE CHIPS ───────────────────────────────────────────────── */
+.chip-iban-doc     { background: rgba(34,186,160,.2); color: #22BAA0; }
+.chip-iban-mismatch{ background: rgba(239,68,68,.25); color: #fca5a5; cursor: default; }
+.chip-iban-db      { background: rgba(59,130,246,.25); color: #93c5fd; }
+.chip-iban-llm     { background: rgba(107,114,128,.25); color: #9ca3af; }
+.chip-iban-manual  { background: rgba(107,114,128,.2); color: #9ca3af; }
+
+.mismatch-warning {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: rgba(239,68,68,.15);
+  border: 1px solid rgba(239,68,68,.35);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #fca5a5;
+}
+
+.btn-sm { padding: 3px 10px; font-size: 11px; }
+
 /* ── MODAL ───────────────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed;

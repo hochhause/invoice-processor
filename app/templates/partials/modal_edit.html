@@ -44,8 +44,12 @@
           <div class="form-section-title">Bank Details</div>
           <div class="form-grid full">
             <div class="field-group">
-              <label>IBAN</label>
+              <label>IBAN <span id="iban-source-badge"></span></label>
               <input type="text" id="f-iban" placeholder="CH…">
+              <div id="iban-mismatch-warning" class="mismatch-warning" style="display:none">
+                ⚠ Vendor DB has: <strong id="iban-mismatch-db-value"></strong> — verify before saving
+              </div>
+              <button type="button" id="btn-add-vendor" class="btn btn-ghost btn-sm" onclick="addToVendors()" style="display:none;margin-top:6px">+ Add to vendors</button>
             </div>
             <div class="field-group">
               <label>BIC</label>

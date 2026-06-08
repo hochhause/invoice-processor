@@ -143,8 +143,32 @@ def run_startup_tests():
         pass  # correct — llm.extract_fields returns None on JSONDecodeError
     check("T10c-malformed-json", _bad_result is None, "Malformed JSON raises JSONDecodeError → extract_fields returns None")
 
+    # ── T11: run_vendor_check — exact match, mismatch, autofill, no-entry ───────
+    import vendors as _vendors
+    from pipeline import run_vendor_check as _rvc
+    _vendors.upsert_vendor("VendorCheck AG", "CH5604835012345678009", "BLKBCH22")
+
+    # Confirmed match
+    _r11a = _rvc({"receiver": "VendorCheck AG", "iban": "CH5604835012345678009"})
+    check("T11a-source-document", _r11a.get("iban_source") == "document", f"iban_source={_r11a.get('iban_source')}")
+
+    # Mismatch — DB IBAN stored in iban_mismatch_db
+    _r11b = _rvc({"receiver": "VendorCheck AG", "iban": "CH9300762011623852957"})
+    check("T11b-mismatch",    _r11b.get("iban_source") == "document_mismatch", f"iban_source={_r11b.get('iban_source')}")
+    check("T11c-mismatch-db", _r11b.get("iban_mismatch_db") == "CH5604835012345678009", f"iban_mismatch_db={_r11b.get('iban_mismatch_db')}")
+
+    # No IBAN in doc → autofill from DB
+    _r11d = _rvc({"receiver": "VendorCheck AG", "iban": ""})
+    check("T11d-autofill-iban",   _r11d.get("iban") == "CH5604835012345678009", f"iban={_r11d.get('iban')}")
+    check("T11e-autofill-source", _r11d.get("iban_source") == "database",        f"iban_source={_r11d.get('iban_source')}")
+
+    # No vendor entry → fields unchanged
+    _r11f = _rvc({"receiver": "Unknown Corp XYZ", "iban": "CH9300762011623852957"})
+    check("T11f-no-vendor", _r11f.get("iban") == "CH9300762011623852957", "No vendor → iban unchanged")
+    check("T11g-no-source", not _r11f.get("iban_source"), "No vendor → iban_source empty")
+
     # ── Report ────────────────────────────────────────────────────────────────
-    total = 26  # T1(4) + T2(4) + T4(4) + T5(1) + T6(1) + T7(3) + T8(4) + T9(2) + T10(3)
+    total = 33  # T1(4)+T2(4)+T4(4)+T5(1)+T6(1)+T7(3)+T8(4)+T9(2)+T10(3)+T11(7)
     passed = total - len(failures)
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)

@@ -45,6 +45,7 @@ function _populateModal(job) {
 
   _colorFields();
   _updateBankPills(job.bank_target || '');
+  _updateIbanSource(job);
 }
 
 function _colorFields() {
@@ -62,6 +63,55 @@ function _colorFields() {
     }
   }
 }
+
+function _updateIbanSource(job) {
+  const badgeEl = document.getElementById('iban-source-badge');
+  const mismatchEl = document.getElementById('iban-mismatch-warning');
+  const mismatchDbEl = document.getElementById('iban-mismatch-db-value');
+  const addVendorBtn = document.getElementById('btn-add-vendor');
+
+  const badgeMap = {
+    'document':          '<span class="chip chip-iban-doc">doc ✓</span>',
+    'document_mismatch': '<span class="chip chip-iban-mismatch">doc ⚠</span>',
+    'database':          '<span class="chip chip-iban-db">DB</span>',
+    'llm':               '<span class="chip chip-iban-llm">llm</span>',
+    'manual':            '<span class="chip chip-iban-manual">manual</span>',
+  };
+
+  if (badgeEl) badgeEl.innerHTML = badgeMap[job.iban_source || ''] || '';
+
+  if (mismatchEl) {
+    const isMismatch = job.iban_source === 'document_mismatch';
+    mismatchEl.style.display = isMismatch ? '' : 'none';
+    if (mismatchDbEl) mismatchDbEl.textContent = job.iban_mismatch_db || '';
+  }
+
+  if (addVendorBtn) {
+    const showAdd = (!job.iban_source || job.iban_source === 'llm') && job.iban;
+    addVendorBtn.style.display = showAdd ? '' : 'none';
+  }
+}
+
+async function addToVendors() {
+  const jobId = document.getElementById('modal-job-id').value;
+  if (!jobId) return;
+  const receiver = document.getElementById('f-receiver')?.value || '';
+  const iban = document.getElementById('f-iban')?.value || '';
+  const bic = document.getElementById('f-bic')?.value || '';
+  if (!receiver || !iban) return;
+
+  await fetch('/api/vendors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receiver_name: receiver, iban, bic }),
+  });
+
+  const badgeEl = document.getElementById('iban-source-badge');
+  if (badgeEl) badgeEl.innerHTML = '<span class="chip chip-iban-db">DB</span>';
+  const btn = document.getElementById('btn-add-vendor');
+  if (btn) btn.style.display = 'none';
+}
+window.addToVendors = addToVendors;
 
 function _updateBankPills(bankTarget) {
   const map = { BKB: 'pill-bkb', RAIFFEISEN: 'pill-raiff', MANUAL: 'pill-manual' };
