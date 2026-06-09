@@ -118,7 +118,7 @@ def run_vendor_check(fields: dict) -> dict:
 
 def _validate_iban(iban: str) -> bool:
     """MOD-97 checksum validation."""
-    iban = re.sub(r"\s", "", iban).upper()
+    iban = re.sub(r"[^A-Za-z0-9]", "", iban).upper()
     if len(iban) < 5:
         return False
     rearranged = iban[4:] + iban[:4]
