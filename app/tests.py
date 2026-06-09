@@ -169,6 +169,17 @@ def run_startup_tests():
     check("T11f-no-vendor", _r11f.get("iban") == "CH9300762011623852957", "No vendor → iban unchanged")
     check("T11g-no-source", not _r11f.get("iban_source"), "No vendor → iban_source empty")
 
+    # ── T12: cost estimate (token-based pricing) ───────────────────────────────
+    from cost import estimate_cost as _est, price_for as _price
+    check("T12a-haiku-input",  abs(_est("claude-haiku-4-5-20251001", 1_000_000, 0) - 1.00) < 1e-9,
+          "1M Haiku input tokens = $1.00")
+    check("T12b-haiku-output", abs(_est("claude-haiku-4-5-20251001", 0, 1_000_000) - 5.00) < 1e-9,
+          "1M Haiku output tokens = $5.00")
+    check("T12c-sonnet-price", _price("claude-sonnet-4-6") == (3.00, 15.00),
+          f"Sonnet 4.6 priced $3/$15, got {_price('claude-sonnet-4-6')}")
+    check("T12d-zero-tokens",  _est("claude-haiku-4-5-20251001", 0, 0) == 0.0,
+          "Zero tokens = $0.00")
+
     # ── Report ────────────────────────────────────────────────────────────────
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)

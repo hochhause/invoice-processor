@@ -38,6 +38,20 @@ def run_qr(pdf_path: str) -> dict:
 _MANDATORY = ["receiver", "iban", "amount", "currency"]
 
 
+def _sum_usage(*usages) -> dict:
+    """Combine per-stage usage records into persistable token columns. Returns an
+    empty dict when no LLM call was made, so QR-only jobs keep the DB default of 0."""
+    present = [u for u in usages if u]
+    if not present:
+        return {}
+    return {
+        "input_tokens": sum(u["input_tokens"] for u in present),
+        "output_tokens": sum(u["output_tokens"] for u in present),
+        # text & image share a model by default; record the last stage that ran
+        "llm_model": present[-1]["model"],
+    }
+
+
 def run_llm(pdf_path: str, existing_fields: dict) -> dict:
     """Staged LLM extraction with vendor check between stages.
 
@@ -45,7 +59,7 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
     QR/existing fields always win over LLM output.
     """
     # ── Stage 1: text LLM ────────────────────────────────────────────────────
-    text_fields = llm.extract_text_stage(pdf_path)
+    text_fields, text_usage = llm.extract_text_stage(pdf_path)
 
     # Interim: QR/existing wins over text, then vendor check
     interim = {**(text_fields or {}), **{k: v for k, v in existing_fields.items() if v}}
@@ -58,11 +72,17 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
 
     # ── Stage 2: image LLM (skipped if text + vendor already complete) ────────
     needs_image = any(not interim.get(f) for f in _MANDATORY)
-    image_fields = llm.extract_image_stage(pdf_path) if needs_image else None
+    if needs_image:
+        image_fields, image_usage = llm.extract_image_stage(pdf_path)
+    else:
+        image_fields, image_usage = None, None
+
+    # Token usage spent across both stages (for cost tracking)
+    usage = _sum_usage(text_usage, image_usage)
 
     # Both stages failed
     if text_fields is None and image_fields is None:
-        result = {**existing_fields, "status": "needs_review", "match_type": "failed"}
+        result = {**existing_fields, "status": "needs_review", "match_type": "failed", **usage}
         result = run_vendor_check(result)
         return result
 
@@ -99,6 +119,7 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
     # ── Final vendor check (image may have resolved receiver) ────────────────
     merged = run_vendor_check(merged)
 
+    merged.update(usage)
     merged["status"] = "LLM-Done" if all(merged.get(f) for f in _MANDATORY) else "needs_review"
     return merged
 

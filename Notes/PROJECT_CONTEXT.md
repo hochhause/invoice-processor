@@ -38,12 +38,14 @@
 ```
 invoice-processor/
 ├── app/
-│   ├── main.py              — FastAPI server + routes
+│   ├── main.py              — FastAPI server + routes (HTTP Basic auth gate)
+│   ├── auth.py              — Optional HTTP Basic auth (APP_PASSWORD; off when unset)
 │   ├── pipeline.py          — Two-function pipeline: run_qr() + run_llm()
-│   ├── llm.py               — Claude Haiku client: extract_fields(pdf_path) → dict
+│   ├── llm.py               — Claude client: extract_text_stage/extract_image_stage → (fields, usage)
+│   ├── cost.py              — Per-model token pricing + estimate_cost()
 │   ├── xml_export.py        — ISO 20022 pain.001 generator (per-bank filtering)
 │   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder
-│   ├── db.py                — SQLite schema + queries (pain.001 fields only)
+│   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage)
 │   ├── tests.py             — Startup self-tests (DEV_MODE)
 │   ├── templates/
 │   │   ├── index.html       — Main dashboard (table + edit modal)
@@ -144,22 +146,31 @@ POST /download/confirm
 
 ```sql
 CREATE TABLE jobs (
-  id           TEXT PRIMARY KEY,
-  filename     TEXT NOT NULL,
-  status       TEXT NOT NULL DEFAULT 'LLM-Pending',
-  receiver     TEXT DEFAULT '',
-  iban         TEXT DEFAULT '',
-  bic          TEXT DEFAULT '',
-  amount       TEXT DEFAULT '',
-  currency     TEXT DEFAULT '',
-  due_date     TEXT DEFAULT '',
-  reference    TEXT DEFAULT '',
-  invoice_id   TEXT DEFAULT '',
-  bank_target  TEXT DEFAULT '',
-  created_at   TEXT DEFAULT (datetime('now')),
-  updated_at   TEXT DEFAULT (datetime('now'))
+  id               TEXT PRIMARY KEY,
+  filename         TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'LLM-Pending',
+  receiver         TEXT DEFAULT '',
+  iban             TEXT DEFAULT '',
+  bic              TEXT DEFAULT '',
+  amount           TEXT DEFAULT '',
+  currency         TEXT DEFAULT '',
+  reference        TEXT DEFAULT '',
+  invoice_id       TEXT DEFAULT '',
+  bank_target      TEXT DEFAULT '',
+  iban_source      TEXT DEFAULT '',    -- document | document_mismatch | database | llm | manual
+  iban_mismatch_db TEXT DEFAULT '',    -- vendor-DB IBAN when extracted IBAN disagrees
+  match_type       TEXT DEFAULT '',    -- '' (qr) | text_full | hybrid | image_only | failed
+  input_tokens     INTEGER DEFAULT 0,  -- LLM cost tracking
+  output_tokens    INTEGER DEFAULT 0,
+  llm_model        TEXT DEFAULT '',    -- model that produced this job (drives cost.estimate_cost)
+  created_at       TEXT DEFAULT (datetime('now')),
+  updated_at       TEXT DEFAULT (datetime('now'))
 );
 ```
+
+> Note: `due_date` is **not** a column — it is parsed transiently for the pain.001
+> `ReqdExctnDt` but not persisted. A separate `vendors` table holds receiver→IBAN/BIC.
+> Token columns feed the cost tracker (see [[DECISIONS]]).
 
 **Status enum:**
 - `QR-processed` — QR scan succeeded
@@ -193,6 +204,11 @@ CREATE TABLE jobs (
 | GET | `/download/csv` | Export CSV |
 | DELETE | `/api/jobs/{id}` | Delete single job |
 | DELETE | `/api/clear-all` | Wipe all non-archived jobs |
+| GET | `/api/analytics` | Match-type counts **+ `cost` block** (per-model token totals + USD) |
+| GET/POST/PUT/DELETE | `/api/vendors[/{id}]` | Vendor IBAN/BIC CRUD |
+
+> **Auth:** when `APP_PASSWORD` is set, every route above requires HTTP Basic
+> (applied as an app-wide `Depends(require_auth)`). `/static/*` is intentionally open.
 
 ---
 
@@ -201,7 +217,16 @@ CREATE TABLE jobs (
 **LLM**
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
-LLM_MODEL=claude-haiku-4-5-20251001   # default
+LLM_MODEL=claude-haiku-4-5-20251001        # image stage; set claude-sonnet-4-6 to switch to Sonnet
+LLM_MODEL_TEXT=claude-haiku-4-5-20251001   # text stage (keep in sync with LLM_MODEL)
+```
+> Switching models is just a config change — cost.py reprices automatically per the
+> `llm_model` stored on each job. Sonnet 4.6 is $3/$15 vs Haiku 4.5 $1/$5 per 1M tok.
+
+**Auth (optional — for secure deployment)**
+```env
+APP_PASSWORD=          # set → every page + API route requires HTTP Basic; unset/empty → auth DISABLED
+APP_USERNAME=admin     # optional, defaults to "admin"
 ```
 
 **Debtor (for pain.001)**
@@ -244,3 +269,5 @@ See [[DECISIONS]] for full rationale. Summary:
 5. Export screen as dedicated route with drag-board for bank assignment
 6. `archived` status instead of delete (audit trail)
 7. Unsorted invoices excluded from export (not blocking — operator confirms)
+8. HTTP Basic auth (single shared `APP_PASSWORD`), disabled when env unset — see [[DECISIONS]]
+9. Cost tracker from real API token usage; model-aware pricing → Sonnet switch is config-only

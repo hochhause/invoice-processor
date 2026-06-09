@@ -153,6 +153,51 @@ due_date, reference, invoice_id, bank_target, created_at, updated_at
 
 ---
 
+### HTTP Basic Authentication (optional, env-gated)
+
+**Decision:** Protect the whole app with HTTP Basic auth, enforced as an app-wide
+`Depends(require_auth)` on the FastAPI instance. A single shared password lives in
+`APP_PASSWORD` (username `APP_USERNAME`, default `admin`). When `APP_PASSWORD` is
+unset/empty, auth is **disabled** (a startup warning is logged); set it only on the
+deployed instance. `/static/*` is left open (mounted sub-app).
+
+**Reason:** "Simple password protection for secure deployment." HTTP Basic was chosen
+over a login-page + cookie session after weighing both: Basic is ~15 lines, zero new
+dependencies, browser-native, and uniformly protects pages + the fetch-driven API +
+the PDF iframe. Trade-off accepted: no styled login page and no clean logout (the
+browser caches credentials until all tabs close). HTTPS is assumed in deployment
+(Basic creds are re-sent every request). `secrets.compare_digest` guards timing.
+
+**Auth-off-when-unset** keeps local dev frictionless; fail-closed was rejected to
+avoid forcing the env var on every local run.
+
+**Location:** `app/auth.py`, wired in `app/main.py` (`FastAPI(dependencies=[...])`).
+
+---
+
+### Cost Tracking from Real Token Usage (model-aware)
+
+**Decision:** Capture `usage.input_tokens` / `usage.output_tokens` from every Claude
+API response and persist them per job (`input_tokens`, `output_tokens`, `llm_model`
+columns). `/api/analytics` sums tokens grouped by model and prices them via
+`cost.estimate_cost()`; the dashboard analytics modal shows total USD + a per-model
+breakdown. QR-only jobs incur no tokens (stay at 0).
+
+**Reason:** "As close as feasible" → use the tokens the API actually billed, not a
+char-count estimate. Storing tokens + model (rather than a precomputed cost) makes the
+estimate **model-aware**: switching `LLM_MODEL` to Sonnet reprices new jobs
+automatically, and the price table in `cost.py` is the single place to update rates.
+Usage is captured even when JSON parsing fails (tokens were still spent). Prompt
+caching is not enabled, so cache tokens are 0 and not separated.
+
+**Pricing (USD per 1M tok, input/output):** Haiku 4.5 $1/$5 · Sonnet 4.5/4.6 $3/$15 ·
+Opus 4.8 $5/$25. Unknown models fall back to Haiku rates.
+
+**Location:** `app/llm.py` (usage capture), `app/pipeline.py` (`_sum_usage`),
+`app/cost.py` (pricing), `app/main.py` (`/api/analytics`), `index.html` (modal).
+
+---
+
 ## Retained Decisions (from prior architecture)
 
 ### IBAN MOD-97 Checksum Validation
@@ -196,6 +241,6 @@ due_date, reference, invoice_id, bank_target, created_at, updated_at
 
 **[MISSING]** LLM response validation — if Haiku returns malformed JSON, need graceful fallback to `needs_review` status rather than crash.
 
-**[MISSING]** Authentication — no user login. Assumes internal network.
+**[DONE]** Authentication — optional HTTP Basic via `APP_PASSWORD` (see "HTTP Basic Authentication" above). Single shared password; disabled when the env var is unset.
 
 **[FUTURE]** Archived PDF viewer — accessing archived invoices for audit currently requires direct DB query.

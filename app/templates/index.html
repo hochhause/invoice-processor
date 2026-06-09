@@ -137,6 +137,27 @@ async function showAnalytics() {
         <span><strong>${count}</strong>${pct != null ? ' <span style="color:var(--text-dim);font-size:11px">· ' + pct + '%</span>' : ''}</span>
       </div>`
     ).join('');
+
+    const c = d.cost;
+    if (c && c.total_usd != null) {
+      const fmtTok = n => (n || 0).toLocaleString();
+      const byModel = (c.by_model || []).map(m =>
+        `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);padding:2px 0">
+          <span>${m.model}</span><span>$${(m.usd || 0).toFixed(4)}</span>
+        </div>`
+      ).join('');
+      body.innerHTML += `
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+            <span style="color:var(--text-dim)">Estimated LLM Cost</span>
+            <span><strong>$${c.total_usd.toFixed(4)}</strong></span>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);padding-bottom:6px">
+            ${fmtTok(c.input_tokens)} in · ${fmtTok(c.output_tokens)} out tokens
+          </div>
+          ${byModel}
+        </div>`;
+    }
   } catch {
     body.textContent = 'Failed to load analytics.';
   }

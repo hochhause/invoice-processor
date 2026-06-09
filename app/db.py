@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     iban_source      TEXT DEFAULT '',
     iban_mismatch_db TEXT DEFAULT '',
     match_type       TEXT DEFAULT '',
+    input_tokens     INTEGER DEFAULT 0,
+    output_tokens    INTEGER DEFAULT 0,
+    llm_model        TEXT DEFAULT '',
     created_at       TEXT DEFAULT (datetime('now')),
     updated_at       TEXT DEFAULT (datetime('now'))
 );
@@ -41,7 +44,8 @@ STATUS_ENUM = {'QR-processed', 'LLM-Pending', 'LLM-Done', 'needs_review', 'archi
 _JOB_COLUMNS = {
     'id', 'filename', 'status', 'receiver', 'iban', 'bic', 'amount',
     'currency', 'reference', 'invoice_id', 'bank_target', 'iban_source',
-    'iban_mismatch_db', 'match_type', 'created_at', 'updated_at',
+    'iban_mismatch_db', 'match_type', 'input_tokens', 'output_tokens',
+    'llm_model', 'created_at', 'updated_at',
 }
 
 
@@ -70,11 +74,14 @@ def init_db():
             conn.execute("DROP TABLE whitelist")
             print("[db] Dropped legacy whitelist table", flush=True)
 
-        # Migration: add Step 11 columns to existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS)
+        # Migration: add later columns to existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS)
         for col_def in [
             "ALTER TABLE jobs ADD COLUMN iban_source TEXT DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN iban_mismatch_db TEXT DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN match_type TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN input_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE jobs ADD COLUMN output_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE jobs ADD COLUMN llm_model TEXT DEFAULT ''",
         ]:
             try:
                 conn.execute(col_def)

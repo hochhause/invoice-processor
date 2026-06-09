@@ -37,7 +37,18 @@ def _parse_response(raw: str) -> dict | None:
         return None
 
 
-def _call_text_llm(client: anthropic.Anthropic, text: str) -> dict | None:
+def _usage(response, model: str) -> dict:
+    """Token-usage record for one API call (cache_* tokens are 0 — caching off)."""
+    return {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "model": model,
+    }
+
+
+def _call_text_llm(client: anthropic.Anthropic, text: str) -> tuple[dict | None, dict | None]:
+    """Returns (parsed_fields_or_None, usage_or_None). Usage is captured even when
+    parsing fails (tokens were still spent); None only when the API call raised."""
     try:
         response = client.messages.create(
             model=TEXT_MODEL,
@@ -49,13 +60,14 @@ def _call_text_llm(client: anthropic.Anthropic, text: str) -> dict | None:
         )
         raw = response.content[0].text if response.content else ""
         print(f"[llm] text_layer raw={raw!r}", flush=True)
-        return _parse_response(raw)
+        return _parse_response(raw), _usage(response, TEXT_MODEL)
     except anthropic.APIError as e:
         print(f"[llm] text LLM failed: {e}", flush=True)
-        return None
+        return None, None
 
 
-def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> dict | None:
+def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> tuple[dict | None, dict | None]:
+    """Returns (parsed_fields_or_None, usage_or_None)."""
     images = _pdf_to_images(pdf_path)
     content = [
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b}}
@@ -76,10 +88,10 @@ def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> dict | None:
         print(f"[llm] stop_reason={response.stop_reason} content_blocks={len(response.content)}", flush=True)
         raw = "{" + (response.content[0].text if response.content else "")
         print(f"[llm] image raw={raw!r}", flush=True)
-        return _parse_response(raw)
+        return _parse_response(raw), _usage(response, MODEL)
     except anthropic.APIError as e:
         print(f"[llm] image LLM failed: {e}", flush=True)
-        return None
+        return None, None
 
 
 def _make_client() -> anthropic.Anthropic:
@@ -89,25 +101,26 @@ def _make_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
 
-def extract_text_stage(pdf_path: str) -> dict | None:
-    """Text-layer extraction only. Returns parsed fields or None (no text layer / API fail)."""
+def extract_text_stage(pdf_path: str) -> tuple[dict | None, dict | None]:
+    """Text-layer extraction. Returns (fields_or_None, usage_or_None) — (None, None)
+    when there is no usable text layer or the read/API call fails."""
     try:
         raw_text = _extract_text_layer(pdf_path)
     except Exception as e:
         print(f"[llm] text layer read failed: {e}", flush=True)
-        return None
+        return None, None
     if len(raw_text.strip()) < 80:
-        return None
+        return None, None
     return _call_text_llm(_make_client(), raw_text)
 
 
-def extract_image_stage(pdf_path: str) -> dict | None:
-    """Image-based extraction only. Returns parsed fields or None on PDF/API failure."""
+def extract_image_stage(pdf_path: str) -> tuple[dict | None, dict | None]:
+    """Image-based extraction. Returns (fields_or_None, usage_or_None)."""
     try:
         return _call_image_llm(_make_client(), pdf_path)
     except Exception as e:
         print(f"[llm] image stage failed: {e}", flush=True)
-        return None
+        return None, None
 
 
 def _pdf_to_images(pdf_path: str, dpi: int = 150) -> list[str]:

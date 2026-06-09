@@ -179,9 +179,41 @@ upload
 
 ---
 
+## 10. Password Protection (HTTP Basic Auth)
+
+**Implemented in:** `app/auth.py`, `app/main.py`
+
+**Behavior:**
+- When `APP_PASSWORD` is set, every page + API route requires HTTP Basic credentials
+  (username `APP_USERNAME`, default `admin`); the browser shows its native sign-in prompt.
+- When `APP_PASSWORD` is unset/empty, auth is disabled (startup warning logged) — local
+  dev stays open. Set the env var only on the deployed instance.
+- `/static/*` assets stay public; constant-time credential compare.
+
+**Config:** `APP_PASSWORD`, `APP_USERNAME` (see [[PROJECT_CONTEXT#Environment Variables]]).
+Rationale: [[DECISIONS#HTTP Basic Authentication (optional, env-gated)]].
+
+---
+
+## 11. LLM Cost Tracker (Analytics)
+
+**Implemented in:** `app/llm.py`, `app/pipeline.py`, `app/cost.py`, `app/main.py`, `app/templates/index.html`
+
+**Behavior:**
+- Token usage (`input_tokens`/`output_tokens`) from each Claude call is stored per job
+  with the `llm_model` that produced it.
+- The Analytics modal shows an **Estimated LLM Cost** section: total USD, total in/out
+  tokens, and a per-model breakdown (`/api/analytics` → `cost` block).
+- Cost is computed from real token counts via `cost.estimate_cost()`; switching
+  `LLM_MODEL` to Sonnet reprices automatically (model-aware pricing table).
+
+**Cost basis:** Haiku 4.5 $1/$5, Sonnet 4.5/4.6 $3/$15 per 1M tokens (in/out).
+Rationale: [[DECISIONS#Cost Tracking from Real Token Usage (model-aware)]].
+
+---
+
 ## Features NOT Implemented (Out of Scope)
 
-- User authentication / login
 - Rate limiting on `/api/run-llm-batch`
 - Archived job audit viewer
 - Email notifications
