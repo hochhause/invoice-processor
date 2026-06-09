@@ -33,15 +33,17 @@ class _SuppressPolling(logging.Filter):
 
 logging.getLogger('uvicorn.access').addFilter(_SuppressPolling())
 
-from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import cost
 import db
 import pipeline
 import vendors as vendors_mod
 import xml_export
+from auth import require_auth
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,6 +53,7 @@ PERSIST_KEYS = {
     "receiver", "iban", "bic", "amount", "currency",
     "reference", "invoice_id", "bank_target", "status",
     "iban_source", "iban_mismatch_db", "match_type",
+    "input_tokens", "output_tokens", "llm_model",
 }
 # Editable fields accepted by the review form.
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency",
@@ -72,7 +75,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, dependencies=[Depends(require_auth)])
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -282,9 +285,30 @@ async def analytics():
         incomplete = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE status = 'needs_review'"
         ).fetchone()[0]
+        # Token usage per model across ALL jobs (archived included — cost was spent).
+        token_rows = conn.execute(
+            "SELECT COALESCE(llm_model, '') AS model, "
+            "SUM(input_tokens) AS in_tok, SUM(output_tokens) AS out_tok "
+            "FROM jobs WHERE input_tokens > 0 OR output_tokens > 0 "
+            "GROUP BY llm_model"
+        ).fetchall()
 
     def pct(n):
         return round(n / total * 100, 1) if total else 0.0
+
+    by_model, total_cost, total_in, total_out = [], 0.0, 0, 0
+    for r in token_rows:
+        in_tok, out_tok = r["in_tok"] or 0, r["out_tok"] or 0
+        usd = cost.estimate_cost(r["model"], in_tok, out_tok)
+        total_cost += usd
+        total_in += in_tok
+        total_out += out_tok
+        by_model.append({
+            "model": r["model"] or "unknown",
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "usd": round(usd, 4),
+        })
 
     return JSONResponse({
         "total_processed": total,
@@ -293,6 +317,12 @@ async def analytics():
         "hybrid":      {"count": hybrid,      "pct": pct(hybrid)},
         "image_only":  {"count": image_only,  "pct": pct(image_only)},
         "incomplete":  {"count": incomplete,  "pct": pct(incomplete)},
+        "cost": {
+            "total_usd": round(total_cost, 4),
+            "input_tokens": total_in,
+            "output_tokens": total_out,
+            "by_model": sorted(by_model, key=lambda m: m["usd"], reverse=True),
+        },
     })
 
 
