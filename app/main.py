@@ -259,6 +259,7 @@ async def analytics():
         ).fetchone()[0]
         qr_count = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE status = 'QR-processed'"
+            " OR (status = 'archived' AND match_type IS NULL)"
         ).fetchone()[0]
         text_full = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE match_type = 'text_full'"
