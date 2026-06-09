@@ -1,6 +1,14 @@
 // ── STATE ──
 let jobs = [];
 
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 // needs_review always lands in unsorted column regardless of bank_target
 function _effectiveBank(job) {
   return job.status === 'needs_review' ? 'MANUAL' : (job.bank_target || 'MANUAL');
@@ -50,15 +58,15 @@ function makeCard(job) {
 
   div.innerHTML = `
     <div class="card-top">
-      <div class="card-receiver">${job.receiver || '—'}</div>
-      <div class="card-amount">${job.amount || '—'}</div>
+      <div class="card-receiver">${esc(job.receiver) || '—'}</div>
+      <div class="card-amount">${esc(job.amount) || '—'}</div>
     </div>
     <div class="card-bottom">
-      <span class="card-currency">${job.currency || '?'}</span>
-      <span class="card-status" style="color:${statusColor}">● ${job.status.replace(/_/g, ' ')}</span>
+      <span class="card-currency">${esc(job.currency) || '?'}</span>
+      <span class="card-status" style="color:${statusColor}">● ${esc(job.status).replace(/_/g, ' ')}</span>
       ${lockHint}
     </div>
-    <button class="card-open-btn" title="Edit" data-job-id="${job.id}">⤢</button>
+    <button class="card-open-btn" title="Edit" data-job-id="${esc(job.id)}">⤢</button>
   `;
 
   if (!locked) {
@@ -208,9 +216,9 @@ function showBlockersPopup(blockers) {
     const item = document.createElement('div');
     item.className = 'blocker-item';
     item.innerHTML = `
-      <div class="filename">${b.filename}</div>
-      <div class="reason">Status: ${b.status}</div>
-      ${b.missing && b.missing.length > 0 ? `<div class="reason">Missing: ${b.missing.join(', ')}</div>` : ''}
+      <div class="filename">${esc(b.filename)}</div>
+      <div class="reason">Status: ${esc(b.status)}</div>
+      ${b.missing && b.missing.length > 0 ? `<div class="reason">Missing: ${b.missing.map(esc).join(', ')}</div>` : ''}
     `;
     list.appendChild(item);
   });

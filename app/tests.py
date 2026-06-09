@@ -29,14 +29,14 @@ def run_startup_tests():
           "Fake dev IBAN should fail checksum (non-MOD97)")
 
     # ── T2: BIC regex rejects fake patterns, accepts real ────────────────────
-    BIC_PATTERN = r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$"
-    check("T2a-real-bic", bool(re.match(BIC_PATTERN, "BLKBCH22")),
+    bic_pattern = r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$"
+    check("T2a-real-bic", bool(re.match(bic_pattern, "BLKBCH22")),
           "BLKBCH22 is a valid 8-char BIC")
-    check("T2b-real-bic-11", bool(re.match(BIC_PATTERN, "BLKBCH22XXX")),
+    check("T2b-real-bic-11", bool(re.match(bic_pattern, "BLKBCH22XXX")),
           "BLKBCH22XXX is a valid 11-char BIC")
-    check("T2c-fake-bic", not bool(re.match(BIC_PATTERN, "SWIFT123")),
+    check("T2c-fake-bic", not bool(re.match(bic_pattern, "SWIFT123")),
           "SWIFT123 (all-numeric location) should fail — needs at least 1 letter in location")
-    check("T2d-too-short", not bool(re.match(BIC_PATTERN, "BLKB")),
+    check("T2d-too-short", not bool(re.match(bic_pattern, "BLKB")),
           "4-char string is not a valid BIC")
 
     # ── T4: pain.001 XML is well-formed and has required elements ─────────────
@@ -48,7 +48,6 @@ def run_startup_tests():
                  "amount": "500.00", "currency": "CHF", "receiver": "Vendor AG",
                  "invoice_id": "INV-001", "due_date": "2026-07-01", "reference": "REF-001"}]
     xml_str = build_pain001(jobs_chf, debtor)
-    check("T4a-xml-parseable", True, "")  # will throw if bad
     try:
         root = ET.fromstring(xml_str.split("\n", 1)[1])  # skip XML declaration
         ns = {"p": "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"}
@@ -171,8 +170,6 @@ def run_startup_tests():
     check("T11g-no-source", not _r11f.get("iban_source"), "No vendor → iban_source empty")
 
     # ── Report ────────────────────────────────────────────────────────────────
-    total = 33  # T1(4)+T2(4)+T4(4)+T5(1)+T6(1)+T7(3)+T8(4)+T9(2)+T10(3)+T11(7)
-    passed = total - len(failures)
     if failures:
         print(f"\n[STARTUP TESTS] {len(failures)} failure(s):", file=sys.stderr)
         for f in failures:

@@ -7,7 +7,11 @@ import vendors
 
 def run_qr(pdf_path: str) -> dict:
     """Run QR scan on upload. Returns fields dict + status. Called synchronously — fast."""
-    qr = qr_swiss.extract_from_pdf(pdf_path)
+    try:
+        qr = qr_swiss.extract_from_pdf(pdf_path)
+    except Exception as e:
+        print(f"[pipeline] QR scan failed for {pdf_path}: {e}", flush=True)
+        return {"status": "LLM-Pending"}
     if qr is None:
         return {"status": "LLM-Pending"}
 
@@ -20,7 +24,6 @@ def run_qr(pdf_path: str) -> dict:
         "currency":   qr.get("currency", ""),
         "reference":  qr.get("reference", ""),
         "invoice_id": "",
-        "due_date":   "",
         "bank_target": db.derive_bank_target(qr.get("currency", "")),
     }
 
@@ -59,7 +62,7 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
 
     # Both stages failed
     if text_fields is None and image_fields is None:
-        result = {**existing_fields, "status": "needs_review", "match_type": "image_only"}
+        result = {**existing_fields, "status": "needs_review", "match_type": "failed"}
         result = run_vendor_check(result)
         return result
 
@@ -77,11 +80,11 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
         merged.update({k: v for k, v in text_fields.items() if v is not None})
     merged.update({k: v for k, v in existing_fields.items() if v})
 
-    # Carry forward vendor-autofilled IBAN from text stage (absent in raw text_fields)
+    # Carry forward vendor-autofilled IBAN/BIC from text stage (absent in raw text_fields)
     if not merged.get("iban") and interim.get("iban"):
         merged["iban"] = interim["iban"]
-        if not merged.get("bic") and interim.get("bic"):
-            merged["bic"] = interim["bic"]
+    if not merged.get("bic") and interim.get("bic"):
+        merged["bic"] = interim["bic"]
 
     merged["match_type"] = match_type
     merged["bank_target"] = db.derive_bank_target(merged.get("currency", ""))

@@ -163,13 +163,19 @@ async def upload(files: list[UploadFile] = File(...)):
     """Accept PDF(s), run QR scan synchronously, persist result immediately."""
     created = []
     for f in files:
-        if not f.filename.lower().endswith(".pdf"):
+        if not f.filename or not f.filename.lower().endswith(".pdf"):
             continue
         job_id = str(uuid.uuid4())
-        dest = UPLOAD_DIR / f"{job_id}_{f.filename}"
-        dest.write_bytes(await f.read())
+        safe_name = os.path.basename(f.filename).replace("/", "_").replace("\\", "_")
+        dest = UPLOAD_DIR / f"{job_id}_{safe_name}"
+        try:
+            dest.write_bytes(await f.read())
+        except Exception as e:
+            print(f"[upload] write failed for {safe_name}: {e}", flush=True)
+            continue
         fields = pipeline.run_qr(str(dest))
-        db.upsert_job(job_id, filename=f.filename, **fields)
+        fields = {k: v for k, v in fields.items() if k in PERSIST_KEYS}
+        db.upsert_job(job_id, filename=safe_name, **fields)
         created.append(job_id)
     return JSONResponse({"queued": created})
 
@@ -214,7 +220,10 @@ async def run_llm_batch(background_tasks: BackgroundTasks):
 
 @app.post("/api/assign-bank/{job_id}")
 async def assign_bank(job_id: str, request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
     bank = (data.get("bank_target") or "").upper()
     try:
         db.set_bank_target(job_id, bank)
@@ -259,7 +268,7 @@ async def analytics():
         ).fetchone()[0]
         qr_count = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE status = 'QR-processed'"
-            " OR (status = 'archived' AND match_type IS NULL)"
+            " OR (status = 'archived' AND (match_type IS NULL OR match_type = ''))"
         ).fetchone()[0]
         text_full = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE match_type = 'text_full'"
@@ -294,7 +303,10 @@ async def list_vendors_route():
 
 @app.post("/api/vendors")
 async def create_vendor(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
     if not data.get("receiver_name") or not data.get("iban"):
         return JSONResponse({"error": "receiver_name and iban required"}, status_code=400)
     vendors_mod.upsert_vendor(data["receiver_name"], data["iban"], data.get("bic", ""))
@@ -303,7 +315,10 @@ async def create_vendor(request: Request):
 
 @app.put("/api/vendors/{vendor_id}")
 async def update_vendor(vendor_id: str, request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
     if not data.get("receiver_name") or not data.get("iban"):
         return JSONResponse({"error": "receiver_name and iban required"}, status_code=400)
     vendors_mod.update_vendor(vendor_id, data["receiver_name"], data["iban"], data.get("bic", ""))

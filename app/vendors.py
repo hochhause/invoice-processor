@@ -35,7 +35,7 @@ def update_vendor(vendor_id: str, receiver_name: str, iban: str, bic: str = "") 
     with db.get_db() as conn:
         conn.execute(
             "UPDATE vendors SET receiver_name = ?, iban = ?, bic = ?, updated_at = datetime('now') WHERE id = ?",
-            (receiver_name, iban, bic, vendor_id)
+            (receiver_name.strip(), iban, bic, vendor_id)
         )
 
 

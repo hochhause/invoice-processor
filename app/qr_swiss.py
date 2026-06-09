@@ -93,33 +93,33 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
 
     fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(pdf_path)
-    for page_num, page in enumerate(doc):
-        for dpi in (150, 300, 400):
-            pix = page.get_pixmap(dpi=dpi)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
+    try:
+        for page_num, page in enumerate(doc):
+            for dpi in (150, 300, 400):
+                pix = page.get_pixmap(dpi=dpi)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
 
-            # 1. full page
-            result = _decode_spc(img, zbar_decode)
-            _save_debug(img, f"p{page_num+1}_{dpi}dpi_full", bool(result))
-            if result:
-                print(f"[qr_swiss] found SPC on page {page_num+1} full at {dpi}dpi", file=sys.stderr, flush=True)
-                doc.close()
-                return result
+                # 1. full page
+                result = _decode_spc(img, zbar_decode)
+                _save_debug(img, f"p{page_num+1}_{dpi}dpi_full", bool(result))
+                if result:
+                    print(f"[qr_swiss] found SPC on page {page_num+1} full at {dpi}dpi", file=sys.stderr, flush=True)
+                    return result
 
-            # 2. bottom third, center 60% (Swiss QR slip location)
-            w, h = img.size
-            bottom = img.crop((w * 2 // 10, h * 2 // 3, w * 8 // 10, h))
-            result = _decode_spc(bottom, zbar_decode)
-            _save_debug(bottom, f"p{page_num+1}_{dpi}dpi_crop", bool(result))
-            if result:
-                print(f"[qr_swiss] found SPC on page {page_num+1} bottom-crop at {dpi}dpi", file=sys.stderr, flush=True)
-                doc.close()
-                return result
+                # 2. bottom third, center 60% (Swiss QR slip location)
+                w, h = img.size
+                bottom = img.crop((w * 2 // 10, h * 2 // 3, w * 8 // 10, h))
+                result = _decode_spc(bottom, zbar_decode)
+                _save_debug(bottom, f"p{page_num+1}_{dpi}dpi_crop", bool(result))
+                if result:
+                    print(f"[qr_swiss] found SPC on page {page_num+1} bottom-crop at {dpi}dpi", file=sys.stderr, flush=True)
+                    return result
 
-        print(f"[qr_swiss] no SPC found on page {page_num+1} of {pdf_path}", file=sys.stderr, flush=True)
+            print(f"[qr_swiss] no SPC found on page {page_num+1} of {pdf_path}", file=sys.stderr, flush=True)
 
-    doc.close()
-    return None
+        return None
+    finally:
+        doc.close()
 
 
 def _parse_spc(payload: str) -> dict | None:

@@ -38,6 +38,12 @@ CREATE INDEX IF NOT EXISTS idx_vendors_receiver ON vendors(lower(receiver_name))
 
 STATUS_ENUM = {'QR-processed', 'LLM-Pending', 'LLM-Done', 'needs_review', 'archived', 'error'}
 
+_JOB_COLUMNS = {
+    'id', 'filename', 'status', 'receiver', 'iban', 'bic', 'amount',
+    'currency', 'reference', 'invoice_id', 'bank_target', 'iban_source',
+    'iban_mismatch_db', 'match_type', 'created_at', 'updated_at',
+}
+
 
 @contextmanager
 def get_db():
@@ -46,6 +52,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
+    except:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -69,8 +78,9 @@ def init_db():
         ]:
             try:
                 conn.execute(col_def)
-            except sqlite3.OperationalError:
-                pass  # column already exists
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e):
+                    raise
 
 
 
@@ -86,7 +96,9 @@ def derive_bank_target(currency: str) -> str:
 
 def upsert_job(job_id: str, **kwargs):
     """Insert job if new, otherwise update only supplied columns."""
-    # Validate status if provided
+    unknown = set(kwargs) - _JOB_COLUMNS
+    if unknown:
+        raise ValueError(f"Unknown job columns: {unknown}")
     if 'status' in kwargs and kwargs['status'] not in STATUS_ENUM:
         raise ValueError(f"Invalid status: {kwargs['status']}. Must be one of {STATUS_ENUM}")
 

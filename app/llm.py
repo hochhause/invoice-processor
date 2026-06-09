@@ -19,14 +19,12 @@ set receiver to null.
 
 Example: {"invoice_id":"INV-001","receiver":"Acme","amount":"1500.00","currency":"USD","due_date":"2024-12-31","iban":null,"bic":null,"reference":null}"""
 
-_MANDATORY = ["receiver", "amount", "currency", "iban"]
-
-
 def _extract_text_layer(pdf_path: str) -> str:
     doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-    return text
+    try:
+        return "\n".join(page.get_text() for page in doc)
+    finally:
+        doc.close()
 
 
 def _parse_response(raw: str) -> dict | None:
@@ -93,61 +91,31 @@ def _make_client() -> anthropic.Anthropic:
 
 def extract_text_stage(pdf_path: str) -> dict | None:
     """Text-layer extraction only. Returns parsed fields or None (no text layer / API fail)."""
-    raw_text = _extract_text_layer(pdf_path)
+    try:
+        raw_text = _extract_text_layer(pdf_path)
+    except Exception as e:
+        print(f"[llm] text layer read failed: {e}", flush=True)
+        return None
     if len(raw_text.strip()) < 80:
         return None
     return _call_text_llm(_make_client(), raw_text)
 
 
 def extract_image_stage(pdf_path: str) -> dict | None:
-    """Image-based extraction only."""
-    return _call_image_llm(_make_client(), pdf_path)
-
-
-def extract_fields(pdf_path: str) -> dict | None:
-    client = _make_client()
-
-    raw_text = _extract_text_layer(pdf_path)
-    has_text = len(raw_text.strip()) >= 80
-
-    text_result: dict | None = None
-    image_result: dict | None = None
-
-    if has_text:
-        print(f"[llm] text layer present ({len(raw_text.strip())} chars)", flush=True)
-        text_result = _call_text_llm(client, raw_text)
-
-    run_image = (
-        not has_text
-        or text_result is None
-        or any(text_result.get(f) is None for f in _MANDATORY)
-    )
-
-    if run_image:
-        image_result = _call_image_llm(client, pdf_path)
-
-    if text_result is None and image_result is None:
+    """Image-based extraction only. Returns parsed fields or None on PDF/API failure."""
+    try:
+        return _call_image_llm(_make_client(), pdf_path)
+    except Exception as e:
+        print(f"[llm] image stage failed: {e}", flush=True)
         return None
-
-    if text_result is not None and image_result is None:
-        merged = text_result
-        match_type = "text_full"
-    elif text_result is None:
-        merged = image_result
-        match_type = "image_only"
-    else:
-        merged = {**image_result, **{k: v for k, v in text_result.items() if v is not None}}
-        match_type = "hybrid"
-
-    merged["_match_type"] = match_type
-    return merged
 
 
 def _pdf_to_images(pdf_path: str, dpi: int = 150) -> list[str]:
     doc = fitz.open(pdf_path)
-    images = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=dpi)
-        images.append(base64.b64encode(pix.tobytes("png")).decode())
-    doc.close()
-    return images
+    try:
+        return [
+            base64.b64encode(page.get_pixmap(dpi=dpi).tobytes("png")).decode()
+            for page in doc
+        ]
+    finally:
+        doc.close()

@@ -11,17 +11,16 @@ Required env vars (debtor = the company sending payments):
   DEBTOR_IBAN  — company IBAN
   DEBTOR_BIC   — company BIC/SWIFT
 """
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 
 
 _NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
 _XSI = "http://www.w3.org/2001/XMLSchema-instance"
 _SCHEMA_LOC = f"{_NS} pain.001.001.03.xsd"
-
-# Service levels removed — now determined by _get_service_level(ccy, bank)
-
 
 def _get_service_level(ccy: str, bank: str) -> tuple[str, bool]:
     """
@@ -190,11 +189,19 @@ def _add_tx(pmt: ET.Element, job: dict, ccy: str):
         _sub(rmt, "Ustrd", ref)
 
 
-def _parse_amount(s: str) -> float:
+def _parse_amount(s: str) -> Decimal:
+    """Parse amount to Decimal. Handles EU decimal comma ("1234,50") and
+    thousands comma ("1,234.56"). LLM output uses decimal point per prompt."""
+    text = str(s).strip()
+    if re.search(r',\d{2}$', text):
+        # EU format: last comma is decimal separator
+        text = text.replace('.', '').replace(',', '.')
+    else:
+        text = text.replace(',', '')
     try:
-        return float(str(s).replace(",", ""))
-    except (ValueError, TypeError):
-        return 0.0
+        return Decimal(text)
+    except InvalidOperation:
+        return Decimal('0')
 
 
 def _to_iso_date(d: str) -> str | None:

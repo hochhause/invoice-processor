@@ -1,28 +1,30 @@
 # Invoice Processor
 
-Intelligent invoice extraction, validation, and export system for mass payment processing compatible with Swiss and European ebanking platforms (UBS, Raiffeisen, BLKB, BKB, etc.).
+Intelligent invoice extraction, validation, and export system for mass payment processing compatible with Swiss and European ebanking platforms (BKB, Raiffeisen, UBS, BLKB, PostFinance, etc.).
 
 ## What It Does
 
-1. **PDF Upload & OCR** — Accepts PDF invoices and extracts text via `markitdown`
-2. **Field Extraction** — Regex-based pattern matching for invoice ID, amount, currency, IBAN, BIC, due date, and reference
-3. **LLM Fallback** — When OCR output is sparse, delegates to Ollama/Claude/DeepSeek for structured extraction
-4. **Web Review Interface** — Modal-based editing and validation of extracted fields
-5. **Multi-Format Export**:
-   - **ISO 20022 pain.001.001.03 XML** — Pain format compatible with BLKB, Raiffeisen, UBS, BKB ebanking portals
-   - **CSV** — Spreadsheet export with all payment fields
-6. **Dev Autofill** — Currency-aware synthetic test data generation (CHF/EUR with valid IBANs and BICs)
+1. **PDF Upload + Swiss QR Scan** — Accepts PDF invoices; instantly decodes Swiss QR-bill (QR-Rechnung / SPC) codes where present
+2. **Two-Stage LLM Extraction** — For non-QR invoices: text-layer extraction first (fast/cheap), then image-rendering fallback for scanned PDFs — both using Claude Haiku
+3. **Vendor IBAN Lookup** — Cross-references extracted receiver names against a local vendor database; autofills or flags IBAN mismatches
+4. **Web Review Interface** — Modal-based editing with field validation; inline bank assignment
+5. **Dual-Bank Export Screen** — Drag-and-drop invoices to BKB or Raiffeisen columns; gated export with blocker popup
+6. **ISO 20022 pain.001 Export** — Bank-sorted XML files for direct upload to ebanking portals
+7. **CSV Export** — Spreadsheet export with all payment fields
+8. **Analytics Dashboard** — Breakdown of extraction methods (QR / text / image / hybrid)
 
 ## Who Made It
 
 **Lyfegen HealthTech AG** — Built for internal invoice mass-payment automation.
+
+---
 
 ## Installation
 
 ### Prerequisites
 
 - **Docker** or **Podman** (5.0+)
-- **Ollama** (optional, for LLM fallback) — running locally on port 11434
+- **Anthropic API key** — Claude Haiku is used for all LLM extraction
 
 ### Quick Start
 
@@ -31,15 +33,12 @@ Intelligent invoice extraction, validation, and export system for mass payment p
 git clone <repo-url>
 cd invoice-processor
 
-# Create .env (or copy from .env.example)
+# Create .env from template
 cp .env.example .env
 
-# Edit .env to configure:
-# - LLM provider (ollama/claude/deepseek)
-# - DEBTOR company details (for pain.001 generation)
-# - DEV_MODE (for startup tests + auto-fill)
+# Edit .env — set ANTHROPIC_API_KEY and DEBTOR_* fields at minimum
 
-# Build and run with Podman
+# Build and run
 podman compose up --build -d
 
 # Server runs on http://localhost:8080
@@ -48,55 +47,43 @@ podman compose up --build -d
 ### Environment Variables
 
 ```env
-# LLM Configuration
-LLM_PROVIDER=ollama           # Options: ollama, claude, deepseek
-LLM_URL=http://host.docker.internal:11434
-LLM_MODEL=llama3.2
+# Required: Anthropic API key for Claude Haiku extraction
+ANTHROPIC_API_KEY=sk-ant-...
 
-# For claude provider:
-# LLM_PROVIDER=claude
-# LLM_URL=https://api.anthropic.com
-# LLM_MODEL=claude-haiku-4-5-20251001
-# ANTHROPIC_API_KEY=sk-ant-...
+# Optional: override Claude model (default: claude-haiku-4-5-20251001)
+LLM_MODEL=claude-haiku-4-5-20251001
+LLM_MODEL_TEXT=claude-haiku-4-5-20251001
 
-# Pain.001 Sender (Debtor) — Your company details
+# Pain.001 sender (debtor) — your company
 DEBTOR_NAME=Your Company AG
-DEBTOR_IBAN=CH56...  # Your company's IBAN
-DEBTOR_BIC=BLKBCH22  # Your bank's BIC
+DEBTOR_IBAN=CH56...
+DEBTOR_BIC=BLKBCH22
 
-# Development mode
-DEV_MODE=true        # Enables startup tests + synthetic data fill buttons
+# Development: enables startup self-tests on container boot
+DEV_MODE=true
+
+# Storage paths (defaults work inside container)
+DB_PATH=/app/data/invoices.db
+UPLOAD_DIR=/app/data/uploads
+
+# Optional: save QR scan debug images
+DEBUG_QR_DIR=/tmp/qr_debug
 ```
-
-### Ollama Setup (Optional, for LLM fallback)
-
-If using Ollama:
-
-```bash
-# Install Ollama: https://ollama.ai
-# Run locally with model:
-ollama serve &
-ollama pull llama3.2
-```
-
-The app will auto-fall back to Ollama if OCR extraction is incomplete.
 
 ### Volume Configuration
 
-The application uses a named Docker/Podman volume to avoid OneDrive sync conflicts:
+The app uses a named Docker/Podman volume to avoid OneDrive sync conflicts:
 
 ```yaml
 volumes:
-  invoice_processor_data:    # Auto-managed by Docker/Podman
-    # Stores: uploads/ and invoices.db
+  invoice_processor_data:    # Stores uploads/ and invoices.db
 ```
-
-To locate the volume on your system:
 
 ```bash
-podman volume ls | grep invoice_processor_data
 podman volume inspect invoice_processor_data
 ```
+
+---
 
 ## Technical Architecture
 
@@ -104,244 +91,262 @@ podman volume inspect invoice_processor_data
 
 ```
 PDF Upload
-    ↓
-markitdown (text extraction)
-    ↓
-(OCR output < MDX_MIN_CHARS?) → LLM fallback
-    ↓
-extract_fields (regex patterns)
-    ↓
-SQLite DB (invoices.db)
-    ↓
-Web Review Modal (manual validation)
-    ↓
-Export: pain.001 XML or CSV
+    │
+    ├─ Swiss QR-bill present? ──► QR-processed (done instantly)
+    │      (qr_swiss.py: pyzbar/zxingcpp decode)
+    │
+    └─ No QR ──► LLM-Pending
+                    │
+                    ▼  (background batch — POST /api/run-llm-batch)
+             Stage 1: Text layer (fitz → Claude Haiku)
+                    │
+             Vendor check: autofill IBAN from vendor DB
+                    │
+             Complete? ──► LLM-Done
+                    │
+             Incomplete? ──► Stage 2: Image render (fitz → PNG → Claude Haiku)
+                    │
+             Final vendor check
+                    │
+             All mandatory fields? ──► LLM-Done
+                    │
+             Missing fields? ──► needs_review
+                    │
+                    ▼
+             Web Review Modal (manual editing)
+                    │
+                    ▼
+             Export Screen (drag BKB ↔ Raiffeisen)
+                    │
+                    ▼
+             pain.001 XML + archive
 ```
 
 ### Key Components
 
-#### 1. **PDF → Markdown** (`app/pipeline.py`)
+#### 1. Swiss QR Decoder (`app/qr_swiss.py`)
 
-Uses [markitdown](https://github.com/microsoft/markitdown) for intelligent PDF text extraction without external OCR services.
+Scans each PDF page at multiple DPIs (150/300/400) and crop strategies:
 
+- Full page scan
+- Bottom-third crop (Swiss QR slip is always in the bottom section)
+- Decoders: **pyzbar** (primary) + **zxingcpp** (fallback)
+- Parses SPC payload (SIX standard 2.2): IBAN, receiver, amount, currency, reference
+
+#### 2. Two-Stage LLM Extraction (`app/llm.py`)
+
+Uses **Claude Haiku** exclusively (no Ollama, no local models):
+
+| Stage | Method | When |
+|-------|--------|------|
+| Text | fitz text layer → Haiku JSON | PDF has ≥80 chars of text |
+| Image | fitz → PNG base64 → Haiku (prefill `{`) | Text stage incomplete or no text layer |
+
+Both stages return the same JSON schema:
+```json
+{"invoice_id": "...", "receiver": "...", "amount": "1234.56",
+ "currency": "CHF", "due_date": "2026-07-01", "iban": "CH56...",
+ "bic": "BLKBCH22", "reference": "..."}
 ```
-- Handles scanned PDFs (image-based)
-- Extracts tables, headers, structured text
-- Returns markdown for regex pattern matching
-```
 
-#### 2. **Field Extraction** (`app/extract.py`)
+`match_type` values: `text_full` | `image_only` | `hybrid` | `failed`
 
-Regex-based pattern matching with bank-specific rule sets (configurable via `CSV_RULE_SET`):
+#### 3. Vendor IBAN Lookup (`app/vendors.py`)
 
-- **Invoice ID**: "INVOICE NUMBER | INV-001", "invoice no: INV-001"
-- **Amount**: Handles commas/periods as thousands/decimals
-- **Currency**: Detects CHF/EUR/USD/GBP symbols and codes
-- **IBAN**: Extracts country code + alphanumeric, validates MOD-97 checksum
-- **BIC**: Validates 8 or 11-character SWIFT codes
-- **Due Date**: Parses DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD formats
+Case-insensitive exact match on `receiver_name`:
 
-**Validation**:
-- IBAN MOD-97 checksum (ISO 13616) — no external dependencies
-- BIC regex pattern enforcement (A-Z bank code + country + location)
+- Match → autofill IBAN/BIC from DB (`iban_source = "database"`)
+- Match + IBAN present → confirm (`iban_source = "document"`) or flag mismatch (`iban_source = "document_mismatch"`)
+- Operator saves review → `iban_source = "manual"`
 
-#### 3. **LLM Fallback** (`app/llm.py`)
+#### 4. Bank Routing (`app/db.py: derive_bank_target`)
 
-If OCR confidence is low (< `MDX_MIN_CHARS`):
+| Currency | Bank |
+|----------|------|
+| CHF, SEK, EUR | BKB |
+| USD, CAD, GBP | RAIFFEISEN |
+| Other | MANUAL |
 
-- Sends markdown to Ollama/Claude/DeepSeek with structured JSON schema
-- Returns extracted fields
-- Logs OCR method for audit trail
+#### 5. ISO 20022 pain.001 Export (`app/xml_export.py`)
 
-Providers:
-- **Ollama** (local, fast, free) — `llama3.2` or other quantized models
-- **Claude** (Anthropic) — `claude-haiku-4-5-20251001` (most reliable)
-- **DeepSeek** (fast, cost-effective) — `deepseek-chat`
+Generates `pain.001.001.03` XML, one file per bank, grouped by currency:
 
-#### 4. **ISO 20022 pain.001 Export** (`app/xml_export.py`)
+| Currency | Bank | Service Level | Local Instrument |
+|----------|------|--------------|-----------------|
+| CHF | BKB | NURG | — |
+| SEK | BKB | NURG | SWIFT |
+| EUR | BKB | SEPA | — |
+| USD/CAD/GBP | RAIFFEISEN | NURG | SWIFT |
 
-**Standard**: [ISO 20022 pain.001.001.03](https://www.iso20022.org/)
+- Uses `decimal.Decimal` for all monetary sums (no float drift)
+- Handles European decimal comma (`"1234,50"` → `1234.50`)
 
-Generates XML compatible with Swiss/EU banking:
+#### 6. Web Dashboard (`app/main.py`, `app/templates/`)
 
-- **Domestic CHF** (SIC): `SvcLvl/Cd = NURG`
-- **SEPA EUR** (euroSIC): `SvcLvl/Cd = SEPA`
-- **Cross-border** (GBP, USD, etc.): `SvcLvl/Cd = NURG` + `LclInstrm/Cd = SWIFT`
+Two screens:
 
-Banks accepting pain.001 format:
-- ✅ UBS
-- ✅ Raiffeisen
-- ✅ BLKB (Basellandschaftliche Kantonalbank)
-- ✅ BKB (Basler Kantonalbank)
-- ✅ PostFinance
-- ✅ Most EU SEPA banks
+**Dashboard** (`/`):
+- Drag-drop upload (multi-PDF)
+- Job table with status badges and IBAN source chips
+- Search and sort
+- Modal review editor with inline PDF viewer
+- Run AI batch button
 
-#### 5. **Web Dashboard** (`app/main.py`, `app/templates/index.html`)
+**Export Screen** (`/export`):
+- Drag-and-drop between BKB / Raiffeisen / Unsorted columns
+- Blocker popup: shows invoices that need review before export
+- Download button: generates both pain.001 files as a ZIP + archives sorted jobs
 
-**Features**:
-- Drag-drop PDF upload
-- Real-time job status (processing/done/error)
-- Modal-based field review and editing
-- Dark mode toggle (persisted in localStorage)
-- Bulk operations: retry all, run AI on all, dev-fill all, clear all
-- Download buttons: pain.001 XML, CSV export
+#### 7. Startup Tests (`app/tests.py`, `DEV_MODE=true`)
 
-**API Endpoints**:
-- `POST /api/upload` — File upload
-- `GET /api/jobs` — List all invoices
-- `POST /api/review/{id}` — Update invoice fields
-- `DELETE /api/jobs/{id}` — Delete invoice
-- `DELETE /api/clear-all` — Delete all
-- `POST /api/queue-llm/{id}` — Reprocess with LLM
-- `GET /download/xml` — Export pain.001
-- `GET /download/csv` — Export CSV
+| ID | Tests |
+|----|-------|
+| T1 | IBAN MOD-97 checksum (valid, invalid, CH fake, zero-width space) |
+| T2 | BIC regex (8-char, 11-char, fake patterns) |
+| T4 | pain.001 XML well-formedness + GrpHdr + NbOfTxs + creditor IBAN |
+| T5 | Multi-currency → separate PmtInf blocks |
+| T6 | No-IBAN jobs skipped; IBAN-only (no BIC) included |
+| T7 | Bank routing: CHF→BKB, USD→RAIFFEISEN, XYZ→MANUAL |
+| T8 | run_qr: valid SPC → fields; no-QR → LLM-Pending |
+| T9 | IBAN validation edge cases |
+| T10 | Amount parsing: EU comma, thousands separator |
+| T11 | Vendor lookup: autofill, mismatch, unknown vendor |
 
-#### 6. **Startup Tests** (`app/tests.py`)
+---
 
-Runs automatically in `DEV_MODE` on container startup:
+## API Reference
 
-- **T1**: IBAN MOD-97 checksum validation
-- **T2**: BIC regex pattern validation
-- **T3**: extract_fields structure validation
-- **T4**: pain.001 XML well-formedness + element presence
-- **T5**: Multi-currency grouping (CHF/EUR → separate PmtInf blocks)
-- **T6**: Skip jobs missing IBAN/BIC (NbOfTxs=0)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Dashboard page |
+| `GET` | `/export` | Export screen |
+| `POST` | `/api/upload` | Upload PDF(s), sync QR scan, persist |
+| `GET` | `/api/jobs` | List jobs (`?include_archived=true`) |
+| `POST` | `/api/review/{id}` | Save edited fields from review modal |
+| `POST` | `/api/run-llm-batch` | Trigger background LLM extraction |
+| `POST` | `/api/assign-bank/{id}` | Override bank_target |
+| `GET` | `/api/pdf/{id}` | Serve original PDF |
+| `GET` | `/api/analytics` | Extraction method breakdown |
+| `GET` | `/api/vendors` | List vendors |
+| `POST` | `/api/vendors` | Create vendor |
+| `PUT` | `/api/vendors/{id}` | Update vendor |
+| `DELETE` | `/api/vendors/{id}` | Delete vendor |
+| `GET` | `/api/export-readiness` | Check for blockers |
+| `POST` | `/download/confirm` | Generate ZIP (pain.001 ×2) + archive |
+| `GET` | `/download/csv` | CSV export |
+| `DELETE` | `/api/jobs/{id}` | Hard-delete job + file |
+| `DELETE` | `/api/clear-all` | Wipe all non-archived jobs |
 
-Fails the container startup if tests don't pass (safety check).
+---
 
-### Tools & Standards
-
-#### Extraction & Processing
-
-| Tool | Purpose | Link |
-|------|---------|------|
-| **markitdown** | PDF → Markdown OCR | [microsoft/markitdown](https://github.com/microsoft/markitdown) |
-| **fastapi** | Web framework + REST API | [FastAPI](https://fastapi.tiangolo.com) |
-| **pdfplumber** | PDF text/table extraction | [pdfplumber](https://github.com/jamesturk/pdfplumber) |
-| **Ollama** | Local LLM inference | [Ollama](https://ollama.ai) |
-| **Claude API** | LLM fallback (Anthropic) | [Anthropic](https://anthropic.com) |
-
-#### Standards & Formats
-
-| Standard | Purpose | Link |
-|----------|---------|------|
-| **ISO 20022 pain.001.001.03** | Payment initiation XML format | [ISO 20022 Registry](https://www.iso20022.org/) |
-| **IBAN (ISO 13616)** | International bank account number + MOD-97 checksum | [Wikipedia IBAN](https://en.wikipedia.org/wiki/International_Bank_Account_Number) |
-| **SWIFT/BIC** | Bank identifier code (8-11 chars) | [SWIFT](https://www.swift.com) |
-| **SIC/euroSIC** | Swiss banking standards for domestic/SEPA | [SIX](https://www.six-group.com) |
-
-#### Development Tools
-
-| Tool | Purpose | Link |
-|------|---------|------|
-| **RTK** | Token-optimized CLI (saves 60-90% on dev operations) | [RTK](https://github.com/reachingforthejack/rtk) |
-| **distill** | Semantic compression for command-line output | [distill](https://github.com/anthropics/distill) |
-| **pytest** | Unit testing framework | [pytest](https://pytest.org) |
-| **podman** | OCI container runtime (Docker-compatible) | [Podman](https://podman.io) |
-
-### Database Schema
+## Database Schema
 
 **invoices.db** (SQLite):
 
 ```sql
 CREATE TABLE jobs (
-  id TEXT PRIMARY KEY,
-  filename TEXT,
-  status TEXT (processing|done|error),
-  invoice_id TEXT,
-  amount TEXT,
-  currency TEXT,
-  receiver TEXT,
-  iban TEXT,
-  bic TEXT,
-  bankgiro TEXT,  -- Legacy (always "")
-  plusgiro TEXT,  -- Legacy (always "")
-  due_date TEXT,
-  reference TEXT,
-  needs_review TEXT (YES|NO),
-  review_reasons TEXT,
-  ocr_method TEXT (markitdown|llm),
-  error_msg TEXT,
-  created_at TEXT,
-  updated_at TEXT
+    id               TEXT PRIMARY KEY,
+    filename         TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'LLM-Pending',
+    -- Extracted payment fields
+    receiver         TEXT DEFAULT '',
+    iban             TEXT DEFAULT '',
+    bic              TEXT DEFAULT '',
+    amount           TEXT DEFAULT '',
+    currency         TEXT DEFAULT '',
+    reference        TEXT DEFAULT '',
+    invoice_id       TEXT DEFAULT '',
+    -- Routing & metadata
+    bank_target      TEXT DEFAULT '',   -- BKB | RAIFFEISEN | MANUAL
+    iban_source      TEXT DEFAULT '',   -- document | database | document_mismatch | llm | manual
+    iban_mismatch_db TEXT DEFAULT '',   -- vendor DB IBAN when mismatch detected
+    match_type       TEXT DEFAULT '',   -- text_full | image_only | hybrid | failed
+    created_at       TEXT DEFAULT (datetime('now')),
+    updated_at       TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE vendors (
+    id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    receiver_name TEXT NOT NULL,
+    iban          TEXT NOT NULL,
+    bic           TEXT DEFAULT '',
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now'))
 );
 ```
+
+**Job status enum**: `QR-processed` | `LLM-Pending` | `LLM-Done` | `needs_review` | `archived` | `error`
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| **fastapi** | Web framework + REST API |
+| **uvicorn** | ASGI server |
+| **anthropic** | Claude Haiku API client |
+| **pymupdf (fitz)** | PDF text extraction + image rendering |
+| **pyzbar** | Primary QR/barcode decoder |
+| **zxingcpp** | Fallback QR decoder |
+| **Pillow** | Image processing for QR scan |
+| **python-multipart** | Multipart file upload |
+| **jinja2** | HTML templating |
+
+---
 
 ## Development
 
 ### Running Locally (Without Docker)
 
 ```bash
-# Install Python 3.11+
 python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Mac/Linux
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Run startup tests
-python -m pytest app/tests.py -v
+# Set env vars
+set ANTHROPIC_API_KEY=sk-ant-...
+set DEBTOR_NAME=Test Corp
+set DEBTOR_IBAN=CH5604835012345678009
+set DEBTOR_BIC=BLKBCH22
+set DEV_MODE=true
 
-# Run server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Run
+uvicorn app.main:app --reload --port 8000
 ```
 
-### Adding Custom Bank Rules
+### Volume on Windows/OneDrive
 
-Create `app/rules/<bank_name>.py`:
-
-```python
-PATTERNS = {
-    "invoice_id": [r"Invoice #(\w+)"],
-    "amount": [r"Total.*?([\d,\.]+)"],
-    # Override defaults for this bank
-}
-```
-
-Set `CSV_RULE_SET=<bank_name>` in `.env` to use.
-
-### Building with Podman
+The volume keeps data outside the synced project directory:
 
 ```bash
-# Build
-podman compose build
-
-# Run with startup tests
-podman compose up -d
-
-# View logs
-podman compose logs -f app
+podman volume ls | findstr invoice_processor
+podman volume inspect invoice_processor_data
 ```
+
+---
 
 ## Troubleshooting
 
-### Ollama Not Found
+### LLM extraction returns null fields
 
-If you see "Connection refused" on LLM calls:
+- Check `ANTHROPIC_API_KEY` is set and valid
+- Check container logs: `podman compose logs -f app`
+- Force re-run: click "✦ Run AI" on the dashboard
 
-```bash
-# Ensure Ollama is running and accessible
-ollama serve &
+### QR code not detected
 
-# From inside container, verify connectivity:
-podman exec <container> curl http://host.docker.internal:11434/api/tags
-```
+- Invoice may not be a Swiss QR-Rechnung
+- Enable debug mode: set `DEBUG_QR_DIR=/tmp/qr_debug` and inspect saved images
+- QR code may be too small — the scanner tries 150/300/400 DPI automatically
 
 ### OneDrive Sync Issues
 
-The app uses a named Docker/Podman volume (`invoice_processor_data`) to avoid conflicts with OneDrive:
+Uploads and database are stored in a named volume, not the project directory — no sync conflicts.
 
-- Uploads and database are stored in the volume, NOT in the project directory
-- This prevents file-lock conflicts during sync
-
-### Volume Permissions (Linux/Mac)
-
-If you see permission errors on volume access:
-
-```bash
-# Run container with current user UID
-podman compose exec app chown -R $(id -u):$(id -g) /app/data
-```
+---
 
 ## License
 
@@ -349,4 +354,4 @@ Proprietary — Lyfegen HealthTech AG
 
 ## Contact
 
-For support or questions, contact: sasha.bieri@lyfegen.com
+sasha.bieri@lyfegen.com
