@@ -48,6 +48,11 @@ def run_llm(pdf_path: str, existing_fields: dict) -> dict:
     interim = {**(text_fields or {}), **{k: v for k, v in existing_fields.items() if v}}
     interim = run_vendor_check(interim)
 
+    # Clear invalid IBAN before image decision so a bad-but-truthy IBAN
+    # doesn't suppress the image fallback.
+    if interim.get("iban") and not _validate_iban(interim["iban"]):
+        interim["iban"] = ""
+
     # ── Stage 2: image LLM (skipped if text + vendor already complete) ────────
     needs_image = any(not interim.get(f) for f in _MANDATORY)
     image_fields = llm.extract_image_stage(pdf_path) if needs_image else None
