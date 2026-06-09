@@ -1,7 +1,8 @@
-import anthropic, base64, fitz, json, os, re
+import anthropic, base64, fitz, json, os, re, time
 
 MODEL      = os.environ.get("LLM_MODEL",      "claude-haiku-4-5-20251001")
 TEXT_MODEL = os.environ.get("LLM_MODEL_TEXT", "claude-haiku-4-5-20251001")
+USE_BATCH  = os.environ.get("LLM_USE_BATCH",  "false").lower() == "true"
 
 PROMPT = """You are an invoice field extractor. Return a JSON object with NO other text,
 NO code fences, NO explanation. Start with { and end with }.
@@ -18,6 +19,8 @@ contains "Lyfegen" — that is the paying company. If only a Lyfegen entity appe
 set receiver to null.
 
 Example: {"invoice_id":"INV-001","receiver":"Acme","amount":"1500.00","currency":"USD","due_date":"2024-12-31","iban":null,"bic":null,"reference":null}"""
+
+_CACHED_SYSTEM = [{"type": "text", "text": PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 def _extract_text_layer(pdf_path: str) -> str:
     doc = fitz.open(pdf_path)
@@ -38,25 +41,27 @@ def _parse_response(raw: str) -> dict | None:
 
 
 def _usage(response, model: str) -> dict:
-    """Token-usage record for one API call (cache_* tokens are 0 — caching off)."""
+    u = response.usage
     return {
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
         "model": model,
     }
 
 
 def _call_text_llm(client: anthropic.Anthropic, text: str) -> tuple[dict | None, dict | None]:
-    """Returns (parsed_fields_or_None, usage_or_None). Usage is captured even when
-    parsing fails (tokens were still spent); None only when the API call raised."""
+    """Returns (parsed_fields_or_None, usage_or_None)."""
     try:
+        if USE_BATCH:
+            return _call_batch(client, TEXT_MODEL, system=_CACHED_SYSTEM,
+                               messages=[{"role": "user", "content": text}])
         response = client.messages.create(
             model=TEXT_MODEL,
             max_tokens=512,
-            system=PROMPT,
-            messages=[
-                {"role": "user", "content": text},
-            ],
+            system=_CACHED_SYSTEM,
+            messages=[{"role": "user", "content": text}],
         )
         raw = response.content[0].text if response.content else ""
         print(f"[llm] text_layer raw={raw!r}", flush=True)
@@ -73,13 +78,18 @@ def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> tuple[dict | 
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b}}
         for b in images
     ]
-    content.append({"type": "text", "text": PROMPT})
+    # Prompt appended to user content; system carries the cached instruction block.
+    content.append({"type": "text", "text": "Extract the invoice fields as JSON."})
 
     print(f"[llm] image model={MODEL} pages={len(images)} pdf={pdf_path}", flush=True)
     try:
+        if USE_BATCH:
+            return _call_batch(client, MODEL, system=_CACHED_SYSTEM,
+                               messages=[{"role": "user", "content": content}])
         response = client.messages.create(
             model=MODEL,
             max_tokens=512,
+            system=_CACHED_SYSTEM,
             messages=[
                 {"role": "user", "content": content},
                 {"role": "assistant", "content": "{"},
@@ -92,6 +102,47 @@ def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> tuple[dict | 
     except anthropic.APIError as e:
         print(f"[llm] image LLM failed: {e}", flush=True)
         return None, None
+
+
+def _call_batch(
+    client: anthropic.Anthropic,
+    model: str,
+    system: list,
+    messages: list,
+) -> tuple[dict | None, dict | None]:
+    """Submit a single-request batch, poll until done, return (fields, usage)."""
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
+    batch = client.messages.batches.create(
+        requests=[
+            Request(
+                custom_id="invoice",
+                params=MessageCreateParamsNonStreaming(
+                    model=model,
+                    max_tokens=512,
+                    system=system,
+                    messages=messages,
+                ),
+            )
+        ]
+    )
+    print(f"[llm] batch submitted id={batch.id}", flush=True)
+    while True:
+        batch = client.messages.batches.retrieve(batch.id)
+        if batch.processing_status == "ended":
+            break
+        print(f"[llm] batch polling status={batch.processing_status}", flush=True)
+        time.sleep(10)
+
+    for result in client.messages.batches.results(batch.id):
+        if result.result.type == "succeeded":
+            msg = result.result.message
+            raw = msg.content[0].text if msg.content else ""
+            print(f"[llm] batch raw={raw!r}", flush=True)
+            return _parse_response(raw), _usage(msg, model)
+        print(f"[llm] batch result type={result.result.type}", flush=True)
+    return None, None
 
 
 def _make_client() -> anthropic.Anthropic:
