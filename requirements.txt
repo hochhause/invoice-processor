@@ -10,4 +10,5 @@ pyzbar==0.1.9
 python-multipart==0.0.12
 requests==2.32.3
 uvicorn[standard]==0.32.1
+xmlschema>=2.4.0
 zxing-cpp>=2.2.0
