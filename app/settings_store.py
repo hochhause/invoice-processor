@@ -64,19 +64,35 @@ def ensure_template(template: Path):
 
 def set_value(key: str, value: str):
     """Persist one key (replace in place, comments preserved) + apply to env."""
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-        raise ValueError(f"invalid settings key: {key!r}")
+    set_many({key: value})
+
+
+def set_many(values: dict, remove: list | None = None):
+    """Persist several keys atomically-ish: replace existing lines in place,
+    append new ones, drop removed ones. Comments and unrelated lines survive.
+    os.environ is updated to match (set / pop) so changes apply immediately."""
+    for key in list(values) + list(remove or []):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            raise ValueError(f"invalid settings key: {key!r}")
+    remove_set = set(remove or [])
+    pending = dict(values)
+
     p = settings_path()
     lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
-    new_line = f"{key}={value}"
-    replaced = False
-    for i, line in enumerate(lines):
+    out = []
+    for line in lines:
         m = _LINE_RE.match(line)
-        if m and m.group(1) == key and not line.lstrip().startswith("#"):
-            lines[i] = new_line
-            replaced = True
-            break
-    if not replaced:
-        lines.append(new_line)
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ[key] = value
+        key = m.group(1) if m and not line.lstrip().startswith("#") else None
+        if key in remove_set:
+            continue
+        if key in pending:
+            out.append(f"{key}={pending.pop(key)}")
+        else:
+            out.append(line)
+    out.extend(f"{k}={v}" for k, v in pending.items())
+    p.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+    for k, v in values.items():
+        os.environ[k] = v
+    for k in remove_set - set(values):
+        os.environ.pop(k, None)

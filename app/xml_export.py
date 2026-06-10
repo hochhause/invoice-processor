@@ -34,24 +34,20 @@ def _get_service_level(ccy: str, bank: str) -> tuple[str, bool]:
     """
     Determine service level code and whether to add SWIFT local instrument.
     Returns: (service_level_code, should_add_swift)
+
+    Currency-driven (not bank-driven) so banks added via the settings popup
+    get correct payment semantics without code changes:
+    CHF → domestic NURG; EUR → SEPA; anything else → NURG + SWIFT.
+    The old per-bank branches encoded exactly these rules for each bank's
+    currency list (BKB: CHF/SEK/EUR, RAIFFEISEN: USD/CAD/GBP).
     """
-    if bank == "BKB":
-        if ccy == "CHF":
-            return ("NURG", False)
-        elif ccy == "SEK":
-            return ("NURG", True)
-        elif ccy == "EUR":
-            return ("SEPA", False)
-        else:
-            return ("NURG", False)
-    elif bank == "RAIFFEISEN":
-        if ccy in ("USD", "CAD", "GBP"):
-            return ("NURG", True)
-        else:
-            return ("NURG", False)
-    else:
-        # MANUAL or unknown bank
+    if ccy == "CHF":
         return ("NURG", False)
+    if ccy == "EUR":
+        return ("SEPA", False)
+    if not bank or bank == "MANUAL":
+        return ("NURG", False)
+    return ("NURG", True)
 
 
 _ISO2_RE = re.compile(r'^[A-Z]{2}$')

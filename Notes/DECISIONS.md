@@ -357,6 +357,29 @@ All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD valid
 
 ---
 
+## In-App Settings + Config-Driven Bank UI (branch: desktop)
+
+**Decision:** All operator-facing config (API key, debtor name, LLM model, banks/currencies/accounts) is editable in a Settings popup that writes `<app-data>/settings.env` — and the frontend renders banks **from config**, never from hardcoded names.
+
+**Why:** the desktop user has no terminal and no `.env`; adding a new bank account must not require a rebuild. Half-measures (editable config but hardcoded BKB/RAIFFEISEN columns) would leave a new bank invisible on the export board — so the bank UI went fully dynamic in the same change.
+
+**Key choices:**
+1. **Same env vocabulary, new write path** — `POST /api/settings` maps the popup straight onto the existing `{BANK}_CURRENCIES` / `{BANK}_{CCY}_IBAN/BIC` keys via `settings_store.set_many(values, remove=stale)`; deleted banks/accounts have their keys removed from file **and** `os.environ`. `config._clear_cache()` makes routing/export pick it up live. Server mode: 403, popup read-only (env stays the source of truth there).
+2. **Validation at the API boundary** — bank `^[A-Z]+$`, ccy `^[A-Z]{3}$`, IBAN MOD-97 (reject, not warn — operator is non-technical), BIC 8/11 shape, default ccy ∈ currencies. Frontend stays dumb.
+3. **`banks.js` single source for the frontend** — bank list + deterministic palette from `/api/accounts-summary`; export columns, modal pills, dashboard chips all render from it. Job with a `bank_target` that no longer exists falls back to the Unsorted column (visible + re-assignable) instead of vanishing.
+4. **`_get_service_level` became currency-driven** (CHF→NURG domestic, EUR→SEPA, else NURG+SWIFT). The old per-bank branches encoded exactly these rules for each bank's currency list; bank-name branches would have silently given settings-added banks no SWIFT instrument and no cross-border export gating (rule-3 blocker keys off `add_swift`). Full startup suite + SIX CH XSD validation pass unchanged.
+5. **Model applies live** — `llm.py` resolves `LLM_MODEL`/`LLM_MODEL_TEXT` per call (was import-time), matching the per-call API-key read; popup writes both keys from one field.
+6. `POST /api/settings/api-key` removed — superseded by the full `POST /api/settings` (first-run now opens the same popup).
+
+**Accepted trade-offs:**
+- R currency collision across banks still resolves first-bank-wins (existing `config.load_accounts` rule) — popup does not block it; warning stays log-only.
+- R `_effectiveBank` fallback means removing a bank silently re-sorts its pending invoices to Unsorted — deliberate (visible beats orphaned).
+- N settings POST is desktop-only; container deployments keep `.env` as the single config source.
+
+**Location:** `app/main.py` (settings section), `app/settings_store.py:set_many`, `app/static/js/{banks,settings,export,modal,dashboard}.js`, `app/templates/{index,export}.html`, `app/templates/partials/modal_edit.html`, `app/xml_export.py:_get_service_level`. See [[Features#13. In-App Settings Popup (branch: desktop)]].
+
+---
+
 ## Notable TODOs / Gaps
 
 **[MISSING]** Rate limiting on `/api/run-llm-batch` — could accidentally trigger multiple concurrent LLM batches if clicked twice. Add a lock flag in DB (`llm_batch_running`).

@@ -121,18 +121,40 @@ async function addToVendors() {
 }
 window.addToVendors = addToVendors;
 
-function _updateBankPills(bankTarget) {
-  const map = { BKB: 'pill-bkb', RAIFFEISEN: 'pill-raiff', MANUAL: 'pill-manual' };
-  for (const [bank, id] of Object.entries(map)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
+let _lastBankTarget = '';
+
+// Pills are built from the config-driven bank list, so banks added in the
+// settings popup appear here without code changes.
+async function _renderBankPills() {
+  const wrap = document.getElementById('bank-pills');
+  if (!wrap) return;
+  await fetchBanksSummary();
+  wrap.innerHTML = '';
+  [...(window._bankNames || []), 'MANUAL'].forEach(bank => {
+    const el = document.createElement('div');
     el.className = 'bank-pill';
-    if (bank === bankTarget.toUpperCase()) {
-      if (bank === 'BKB') el.classList.add('active-bkb');
-      else if (bank === 'RAIFFEISEN') el.classList.add('active-raiff');
-      else if (bank === 'MANUAL') el.classList.add('active-manual');
-    }
-  }
+    el.dataset.bank = bank;
+    el.textContent = bankLabel(bank);
+    el.onclick = () => selectBankPill(bank);
+    wrap.appendChild(el);
+  });
+  _applyBankPills(_lastBankTarget);
+}
+window._renderBankPills = _renderBankPills;
+
+function _updateBankPills(bankTarget) {
+  _lastBankTarget = (bankTarget || '').toUpperCase();
+  _applyBankPills(_lastBankTarget);
+}
+
+function _applyBankPills(target) {
+  document.querySelectorAll('#bank-pills .bank-pill').forEach(el => {
+    const active = el.dataset.bank === target;
+    const c = bankColor(el.dataset.bank);
+    el.style.background = active ? c : '';
+    el.style.borderColor = active ? c : '';
+    el.style.color = active ? '#fff' : '';
+  });
 }
 
 function closeModal() {
@@ -216,6 +238,7 @@ function _wireInputListeners() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', _colorFields);
   }
+  _renderBankPills();
 }
 
 // Expose globally (callable from dashboard.js and export.js)

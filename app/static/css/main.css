@@ -262,9 +262,7 @@ body.drag-active::after {
   font-weight: 700;
   letter-spacing: .05em;
 }
-.chip-bkb { background: rgba(29,78,216,.25); color: #93c5fd; }
-.chip-raiff { background: rgba(6,78,59,.4); color: #6ee7b7; }
-.chip-manual { background: rgba(120,53,15,.4); color: #fcd34d; }
+/* bank chips are colored inline via banks.js (config-driven palette) */
 
 /* ── IBAN SOURCE CHIPS ───────────────────────────────────────────────── */
 .chip-iban-doc     { background: rgba(34,186,160,.2); color: #22BAA0; }
@@ -412,9 +410,7 @@ body.drag-active::after {
   transition: all .15s;
 }
 .bank-pill:hover { border-color: var(--accent); color: var(--text); }
-.bank-pill.active-bkb { background: #1e40af; border-color: #3b82f6; color: #fff; }
-.bank-pill.active-raiff { background: #065f46; border-color: #10b981; color: #fff; }
-.bank-pill.active-manual { background: #78350f; border-color: var(--amber); color: #fff; }
+/* active pill colors are applied inline via banks.js (config-driven palette) */
 
 .modal-footer {
   display: flex;
