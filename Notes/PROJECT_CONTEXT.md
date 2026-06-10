@@ -64,18 +64,18 @@ invoice-processor/
 │   ├── PROJECT_CONTEXT.md   — This file
 │   ├── DECISIONS.md         — [[DECISIONS]]
 │   ├── Features.md          — [[Features]]
-│   └── export_screen_poc.html — POC for export screen UI
+│   └── Plan.md              — [[Plan]]
 ├── desktop/                 — Desktop packaging (branch: desktop) [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]]
 │   ├── launcher.py          — Entry point: load settings.env → uvicorn on 127.0.0.1:8743 → open browser
 │   ├── InvoiceProcessor.spec — PyInstaller onedir spec (datas: templates/static/schemas; excludes pyzbar/tests)
 │   ├── settings.env.template — Seeded to app-data on first run (bank config, models)
-│   ├── requirements-desktop.txt — requirements.txt minus pyzbar/pytest/xmlschema + pyinstaller
+│   ├── requirements-desktop.txt — requirements.txt minus pyzbar/xmlschema + pyinstaller
 │   └── README.md            — Build + recipient instructions
 ├── .github/workflows/desktop-build.yml — Windows+macOS PyInstaller builds (manual / desktop-v* tag)
 ├── README.md
 ├── start.sh
 ├── Dockerfile
-├── docker-compose.yml
+├── compose.yaml
 ├── .env.example
 └── .gitignore
 ```
