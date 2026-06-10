@@ -272,24 +272,24 @@ APP_USERNAME=admin     # optional, defaults to "admin"
 ```env
 DEBTOR_NAME=Lyfegen HealthTech AG
 
-# BKB: CHF domestic + SEPA (SEK/EUR fall back to CHF account)
+# BKB: CHF domestic + SEPA (SEK has no own acct → falls back to CHF default)
 BKB_CURRENCIES=CHF,EUR,SEK
 BKB_DEFAULT_CCY=CHF
-BKB_CHF_IBAN=<CH IBAN>
-BKB_CHF_BIC=BLKBCH22
+BKB_CHF_IBAN=<CH IBAN>        # spaces allowed — config.load_accounts normalizes
 BKB_EUR_IBAN=<CH IBAN>
-BKB_EUR_BIC=BLKBCH22
+BKB_BIC=BLKBCH22              # bank-level fallback; {BANK}_{CCY}_BIC overrides per account
 
-# Raiffeisen: cross-border (CAD/GBP fall back to USD account)
+# Raiffeisen: cross-border (SWIFT)
 RAIFFEISEN_CURRENCIES=USD,CAD,GBP
 RAIFFEISEN_DEFAULT_CCY=USD
 RAIFFEISEN_USD_IBAN=<CH IBAN>
-RAIFFEISEN_USD_BIC=RAIFCH22XXX
 RAIFFEISEN_CAD_IBAN=<CH IBAN>
-RAIFFEISEN_CAD_BIC=RAIFCH22XXX
 RAIFFEISEN_GBP_IBAN=<CH IBAN>
-RAIFFEISEN_GBP_BIC=RAIFCH22XXX
+RAIFFEISEN_BIC=RAIFCH22
 ```
+> IBANs are normalized (whitespace stripped, uppercased) at load. `{BANK}_BIC`
+> fills any account missing a per-ccy BIC. The settings popup saves explicit
+> per-ccy keys and removes the bank-level fallback key it supersedes.
 > `DEBTOR_IBAN` / `DEBTOR_BIC` are superseded by the per-bank keys above — **T12 cleaned** them out of `.env.example` (only `DEBTOR_NAME` + the per-bank/ccy keys remain). This section is the source of truth the `.env.example` body mirrors.
 
 **Paths**

@@ -422,12 +422,17 @@ _BIC_RE = re.compile(r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$")
 
 
 def _bank_env_keys(banks: list) -> set:
-    """Env keys owned by a bank-config list (parsed shape of /api/settings)."""
+    """Env keys owned by a bank-config list (parsed shape of /api/settings).
+
+    Includes the bank-level ``{BANK}_BIC`` fallback: the popup saves explicit
+    per-ccy BICs (GET already resolves the fallback into each account), so the
+    bank-level key is always superseded on save and cleaned up here."""
     keys = set()
     for b in banks:
         name = b["name"]
         keys.add(f"{name}_CURRENCIES")
         keys.add(f"{name}_DEFAULT_CCY")
+        keys.add(f"{name}_BIC")
         for acct in b["accounts"]:
             keys.add(f"{name}_{acct['ccy']}_IBAN")
             keys.add(f"{name}_{acct['ccy']}_BIC")
