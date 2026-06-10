@@ -37,12 +37,18 @@ manual trigger → POST /api/run-llm-batch → status=LLM-Done|needs_review
 
 **Reason:** Prior approach: LLM → raw text → regex → fields. This created a two-failure-mode system (LLM wrong OR regex wrong). Single-step structured extraction is simpler and more reliable.
 
-**Prompt contract:**
+**Prompt contract (updated T6):**
 ```
 Return ONLY valid JSON with keys: invoice_id, receiver, amount (decimal string),
-currency (ISO 3-letter), due_date (YYYY-MM-DD), iban, bic, reference.
+currency (ISO 3-letter), due_date (YYYY-MM-DD), iban, bic, reference,
+cdtr_street, cdtr_building_no, cdtr_postcode, cdtr_town,
+cdtr_country (ISO 3166-1 alpha-2 or null).
 Use null for missing fields. No markdown.
 ```
+Address fields (`cdtr_*`) refer to the receiver's mailing address as printed on the
+invoice. `cdtr_country` must be a 2-letter ISO code or null — never a full name.
+All 13 keys are always present; unknown fields are null, not omitted.
+See [[Plan#T6 — LLM extracts creditor address (structured)]].
 
 ---
 
@@ -129,6 +135,13 @@ due_date, reference, invoice_id, bank_target, created_at, updated_at
 **Reason:** A pain.001 file is a payment instruction. Silently omitting an invoice that an operator believes is being paid is a financial-correctness hazard; forcing completion first guarantees the exported batch == the operator's intent.
 
 **Location:** `app/main.py` → `_export_blockers()`, `download_confirm()`, `export_readiness()`.
+
+**T9 — Export gating extended (done):** `_export_blockers()` now runs three checks (rule 1 is the original hard-block; rules 2–3 are new):
+- Rule 1 (`blocker_type: incomplete`) — unchanged: bad status or missing mandatory field.
+- Rule 2 (`blocker_type: unresolvable_account`) — job routed to BKB/RAIFFEISEN but `config.resolve_account(bank, ccy, accounts)` returns no account (IBAN or BIC absent, including default fallback). Prevents `build_pain001` from raising `ValueError` at download time.
+- Rule 3 (`blocker_type: cross_border_incomplete`) — RAIFFEISEN job missing creditor `bic` or `cdtr_country`; required for valid SWIFT output (empty `<BICFI/>` or missing `<Ctry>` → bank silent reject).
+
+Each blocker entry now carries `blocker_type` (backwards-compat — callers that ignore unknown fields are unaffected). Frontend (`export.js`) fetches `/api/export-readiness` on init **and** after each drag+drop; builds `blockedIds` Set; cards matching rules 2–3 are greyed + undraggable (same CSS as `needs_review` + distinct tooltip). Unknown-ccy `MANUAL` cards stay draggable → drag into bank → T1 `resolve_account` picks the default account. See [[Plan#T9 — Export gating]], [[Features#5. Export Screen — Bank Assignment & Download]].
 
 ---
 
@@ -232,6 +245,80 @@ Opus 4.8 $5/$25. Unknown models fall back to Haiku rates.
 
 **Removed tests:** T3 (regex extraction structure) — no regex pipeline.
 **Added tests:** T7 (bank_target routing logic), T8 (LLM JSON validation).
+
+---
+
+## Export Rework — Per-Account + pain.001.001.09 (PLANNED)
+
+> Full task breakdown + file:line refs: [[Plan]].
+
+### Per-Account Debtor Model (.env-driven)
+
+**Decision:** Replace the single global debtor account (`DEBTOR_IBAN`/`DEBTOR_BIC`) with a per-bank, per-currency account set defined entirely in `.env`. Each bank declares its currencies, a default account, and one account per currency:
+
+```
+DEBTOR_NAME=Lyfegen HealthTech AG
+BKB_CURRENCIES=CHF,EUR,SEK        BKB_DEFAULT_CCY=CHF
+BKB_CHF_IBAN/BIC   BKB_EUR_IBAN/BIC
+RAIFFEISEN_CURRENCIES=USD,CAD,GBP RAIFFEISEN_DEFAULT_CCY=USD
+RAIFFEISEN_{USD,CAD,GBP}_IBAN/BIC
+```
+
+**Resolution:** `bank = bank whose *_CURRENCIES holds ccy (else MANUAL)`; `acct = accounts[bank].get(ccy) or accounts[bank][DEFAULT_CCY]`.
+
+**Reason:** Adding/changing an account must be a config change, not a code change. The default-account fallback satisfies the operator rule: SEK (and any other BKB-routed ccy without its own account) debits the **BKB CHF** account; Raiffeisen's fallback is **USD**. Routing (`derive_bank_target`) is derived from the same map — one source of truth, no drift between routing and accounts.
+
+**Debugging notes:**
+- A currency PmtInf draws DbtrAcct/DbtrAgt from the *resolved* account, so SEK and CHF blocks can legitimately reference the **same** IBAN. Not a bug.
+- PmtInf is grouped per **transaction currency** (keeps `CtrlSum` single-currency-correct). `DbtrAcct/Ccy` = account currency; per-tx `InstdAmt/Ccy` = payment currency — an FX payment when they differ.
+- Unknown currency → `MANUAL`; operator may drag it into a bank column → it then resolves to that bank's default account.
+
+**Location:** `app/config.py` (**T1 done** — `load_accounts`, `get_accounts`, `resolve_account`, `_clear_cache`; **T4** extended `resolve_account(bank, ccy, cfg=None)` to also return the resolved *account* `ccy` and to resolve against an explicitly-passed config, keeping `build_pain001` pure — one source of truth, no drift); `app/db.py:derive_bank_target` (**T2 done** — config-driven via `ccy_bank_index`); `app/xml_export.py:build_pain001` (**T4 done** — signature `build_pain001(jobs, accounts, bank)`; each ccy PmtInf draws `DbtrAcct`/`DbtrAgt` from `resolve_account(bank, ccy)`, `DbtrAcct/Ccy`=account ccy, per-tx `InstdAmt/Ccy`=payment ccy; raises `ValueError` if a payable (bank,ccy) has no resolvable IBAN+BIC — defensive, T9 gates upstream); `app/main.py:_accounts` (**T8 done** — `_debtor()` replaced by `_accounts()` = `config.get_accounts()`; download route passes the full accounts dict to both `build_pain001` calls; export path is fully wired).
+
+---
+
+### pain.001.001.09 Migration
+
+**Decision:** Upgrade the generator from `pain.001.001.03` to `pain.001.001.09` and validate output against the XSD in tests.
+
+**Three breaking deltas (silent bank-reject if missed) — keep front-of-mind when debugging "bank rejected the file":**
+1. Namespace/schemaLocation → `urn:iso:std:iso:20022:tech:xsd:pain.001.001.09`.
+2. Financial-institution id element renamed `BIC` → **`BICFI`** (both `DbtrAgt` and `CdtrAgt`).
+3. `ReqdExctnDt` is no longer a bare date — it wraps a choice: `<ReqdExctnDt><Dt>YYYY-MM-DD</Dt></ReqdExctnDt>`.
+
+**Cross-border conformance (full, T5 done):** **pure-structured** creditor address (`Cdtr/PstlAdr`: `StrtNm`,`BldgNb`,`PstCd`,`TwnNm`,`Ctry`) — CH design: **no `AdrLine`** (even though `PostalAddress24_pain001_ch_3` technically allows `AdrLine` with `minOccurs=0`, structured fields are required by Swiss payments practice); `ChrgBr` at PmtInf level: SEPA→`SLEV`, SWIFT→`SHAR`, CHF domestic omitted; enforced creditor `BICFI`. New `cdtr_*` columns + structured LLM extraction supply the address (T6/T7 pending); pre-migration jobs lack it → `_cdtr_address` emits nothing silently → expect `needs_review` for cross-border until T6/T7 land.
+
+**Reason:** Newer Swiss Payment Standards (SIX) ride on `.09` with structured addresses; `.03` is being retired. Validating against the XSD in CI turns "bank rejects on upload" into a failing local test.
+
+**XSD in hand:** `app/schemas/pain.001.001.09.ch.03.xsd` — the **SIX Swiss-restricted** schema (©2021), not the generic ISO one. Its `targetNamespace` is the plain ISO `urn:iso:std:iso:20022:tech:xsd:pain.001.001.09` (root type `Document_pain001_ch`), so our output namespace is unchanged; only `xsi:schemaLocation` filename points at it.
+
+**Residual risk:** the XSD validates **structure/types, not presence** (address fields are all `minOccurs=0`) and enforces a restricted **char-set** (Latin subset). Missing country/BIC for cross-border and non-Latin chars must be caught by our own export blockers + the SIX **Validation Portal** (validation.iso-payments.ch), not the XSD alone.
+
+**Location:** `app/xml_export.py` (**T3 done** — namespace/schemaLocation → `.09.ch.03`, `BIC`→`BICFI` on Dbtr+Cdtr agents, `ReqdExctnDt` now wraps `<Dt>`; **T5 done** — `_cdtr_address` helper emits structured `PstlAdr`, `ChrgBr` at PmtInf level), `app/schemas/pain.001.001.09.ch.03.xsd` (present), `app/tests.py` (**T3 done** — ns strings bumped `.03→.09`; **T5 done** — T5b–T5f assert ChrgBr + PstlAdr rules, Txsd validates; full T11 assertion suite still pending).
+
+**T3 residual (financial-correctness) — CLOSED by T4:** the `.03→.09` rename was structural only and an empty debtor BIC emitted an invalid `<BICFI/>`. **T4** now sources `DbtrAgt/BICFI` (and `DbtrAcct/IBAN`) from the resolved per-(bank,ccy) account, and `build_pain001` raises `ValueError` if that account lacks IBAN+BIC — so the generator can no longer emit an empty `<BICFI/>`. T9 (export gating) still owns surfacing unresolvable accounts to the operator *before* download. See [[Plan#T4 — Per-account DbtrAcct/DbtrAgt]].
+
+**T7 — DB persistence (done):** `cdtr_street`, `cdtr_building_no`, `cdtr_postcode`, `cdtr_town`, `cdtr_country` columns added to the `jobs` table (`db.py:SCHEMA`, `_JOB_COLUMNS`, ALTER TABLE migrations). `PERSIST_KEYS` and `REVIEW_FIELDS` in `main.py` updated — pipeline writes address fields from LLM output; operators can correct them via the review form. Existing rows default to `''`; pre-migration cross-border jobs will lack address data until re-extracted or manually filled. See [[Plan#T7 — DB columns + migration]].
+
+---
+
+### Vendor IBAN Takes Priority (space-insensitive)
+
+**Decision:** When a receiver matches the vendor table, the **vendor-table IBAN is authoritative** and overrides the LLM/document-read IBAN. IBAN comparison ignores structural fillers (spaces) — both sides normalized (`[^A-Za-z0-9]` stripped, upper-cased) before compare. LLM always emits IBANs spaceless; the **frontend and vendor table display** them grouped in 4s for readability, while storage stays normalized.
+
+**Reason:** The curated vendor table is the trusted record; per-invoice OCR/LLM extraction is the lower-trust source. Space differences were producing false `document_mismatch` flags. On a real mismatch the table IBAN wins, the rejected extracted value is preserved in `iban_mismatch_db`, and the `doc ⚠` chip surfaces it for operator awareness (status unchanged — non-blocking).
+
+**Debugging notes:**
+- `iban_source=document_mismatch` now means "LLM IBAN was overridden by the table," not "we kept the LLM IBAN." `iban` holds the table value; `iban_mismatch_db` holds the discarded extracted value.
+- R if the vendor table is stale, a legitimately-new invoice IBAN is overridden → operator must update the vendor record (the `↑ Update vendor IBAN` action). This trade trusts curation over extraction by design.
+
+**Location (planned):** `app/pipeline.py:run_vendor_check`, `app/vendors.py` (normalize on store), `app/static/js/{dashboard,modal,vendors}.js` (display formatting).
+
+---
+
+## Test Suite (T11 DONE)
+
+**XSD Validation (pain.001.001.09):** Startup self-tests (DEV_MODE=true, 38 checks) validate all `.09` structural deltas against the SIX CH XSD (`app/schemas/pain.001.001.09.ch.03.xsd`). Txsd checks confirm CHF domestic and multi-currency (EUR) output is valid. Guarded import: xmlschema is optional (lands with T10 via requirements.txt); skips gracefully if absent. All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD validation]]).
 
 ---
 

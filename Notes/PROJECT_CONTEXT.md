@@ -93,6 +93,12 @@ invoice-processor/
 uvicorn app.main:app --reload --port 8000
 ```
 
+**Startup Self-Tests (T11)**
+```bash
+cd app && DEV_MODE=true python -c "from tests import run_startup_tests; run_startup_tests()"
+```
+Requires env config (BKB_CURRENCIES, etc.); see [[DECISIONS#Per-Account Debtor Model (.env-driven)]]. 38 checks covering IBAN/BIC validation, pain.001 generation, multi-currency, vendor IBAN priority (space-insensitive), routing, QR mock, LLM JSON, cost tracking, config loader, **XSD validation vs SIX CH schema**. All pass when env is set.
+
 ---
 
 ## Pipeline Architecture
