@@ -42,12 +42,14 @@ from fastapi.templating import Jinja2Templates
 import config
 import cost
 import db
+import paths
 import pipeline
+import settings_store
 import vendors as vendors_mod
 import xml_export
 from auth import require_auth
 
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
+UPLOAD_DIR = paths.upload_dir()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Columns that may be written back to a job row from pipeline output.
@@ -80,8 +82,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, dependencies=[Depends(require_auth)])
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# Absolute paths so the app works when CWD != app/ (PyInstaller bundle, launcher)
+_RES = paths.resource_dir()
+app.mount("/static", StaticFiles(directory=str(_RES / "static")), name="static")
+templates = Jinja2Templates(directory=str(_RES / "templates"))
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -407,6 +411,42 @@ async def update_vendor(vendor_id: str, request: Request):
 @app.delete("/api/vendors/{vendor_id}")
 async def delete_vendor_route(vendor_id: str):
     vendors_mod.delete_vendor(vendor_id)
+    return JSONResponse({"ok": True})
+
+
+# ── Settings (desktop mode) ───────────────────────────────────────────────────
+
+@app.get("/api/settings/status")
+async def settings_status():
+    """First-run probe for the desktop app: is the Anthropic key configured?
+
+    ``desktop`` tells the frontend whether the key can be saved via the API
+    (container deployments keep configuring it through env/.env)."""
+    return JSONResponse({
+        "desktop": paths.is_desktop(),
+        "api_key_set": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+    })
+
+
+@app.post("/api/settings/api-key")
+async def save_api_key(request: Request):
+    """Persist the Anthropic API key to <app-data>/settings.env (desktop only).
+
+    Applies immediately (llm.py reads the env per call) — no restart needed."""
+    if not paths.is_desktop():
+        return JSONResponse(
+            {"error": "settings are managed via environment in server mode"},
+            status_code=403,
+        )
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    key = (data.get("api_key") or "").strip()
+    if not key or any(c.isspace() for c in key):
+        return JSONResponse({"error": "API key must be a non-empty single token"},
+                            status_code=400)
+    settings_store.set_value("ANTHROPIC_API_KEY", key)
     return JSONResponse({"ok": True})
 
 

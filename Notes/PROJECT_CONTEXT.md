@@ -46,9 +46,11 @@ invoice-processor/
 │   ├── llm.py               — Claude client: extract_text_stage/extract_image_stage → (fields, usage); PROMPT extracts 13 keys incl. cdtr_* address fields (T6) [[DECISIONS#LLM Returns Structured JSON (not raw OCR text)]]
 │   ├── cost.py              — Per-model token pricing + estimate_cost()
 │   ├── xml_export.py        — ISO 20022 pain.001.001.09 generator: build_pain001(jobs, accounts, bank); per-ccy PmtInf debits config.resolve_account(bank, ccy) (DbtrAcct/Ccy=account ccy, InstdAmt/Ccy=payment ccy/FX); ChrgBr at PmtInf level (SEPA→SLEV, SWIFT→SHAR); structured Cdtr/PstlAdr (_cdtr_address); validates vs SIX CH XSD; T9 blockers gate upstream [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#pain.001.001.09 Migration]]
-│   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder
-│   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage)
-│   ├── tests.py             — Startup self-tests (DEV_MODE)
+│   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder (pyzbar optional; zxing-cpp always)
+│   ├── paths.py             — Path resolution: container `/app/data` vs desktop app-data; resource_dir() for bundled assets [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]]
+│   ├── settings_store.py    — Desktop settings.env (load into environ before app imports; set_value persists + applies)
+│   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage); DB_PATH via paths.db_path()
+│   ├── tests.py             — Startup self-tests (DEV_MODE; excluded from desktop bundle)
 │   ├── templates/
 │   │   ├── index.html       — Main dashboard (table + edit modal)
 │   │   └── export.html      — Export screen (drag board + download)
@@ -63,6 +65,13 @@ invoice-processor/
 │   ├── DECISIONS.md         — [[DECISIONS]]
 │   ├── Features.md          — [[Features]]
 │   └── export_screen_poc.html — POC for export screen UI
+├── desktop/                 — Desktop packaging (branch: desktop) [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]]
+│   ├── launcher.py          — Entry point: load settings.env → uvicorn on 127.0.0.1:8743 → open browser
+│   ├── InvoiceProcessor.spec — PyInstaller onedir spec (datas: templates/static/schemas; excludes pyzbar/tests)
+│   ├── settings.env.template — Seeded to app-data on first run (bank config, models)
+│   ├── requirements-desktop.txt — requirements.txt minus pyzbar/pytest/xmlschema + pyinstaller
+│   └── README.md            — Build + recipient instructions
+├── .github/workflows/desktop-build.yml — Windows+macOS PyInstaller builds (manual / desktop-v* tag)
 ├── README.md
 ├── start.sh
 ├── Dockerfile
@@ -92,6 +101,15 @@ invoice-processor/
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
+
+**Desktop (PyInstaller / from source)**
+```bash
+python desktop/launcher.py        # source; INVOICE_NO_BROWSER=1, INVOICE_PORT=n for testing
+pyinstaller desktop/InvoiceProcessor.spec --noconfirm   # build → dist/InvoiceProcessor/
+```
+Desktop mode (`sys.frozen` or `INVOICE_DESKTOP=1`) moves all writable data to
+`%APPDATA%\InvoiceProcessor` (Win) / `~/Library/Application Support/InvoiceProcessor` (mac);
+config is loaded from `<app-data>/settings.env` before app imports. See [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]].
 
 **Startup Self-Tests (T11)**
 ```bash
@@ -223,6 +241,8 @@ CREATE TABLE jobs (
 | DELETE | `/api/jobs/{id}` | Delete single job |
 | DELETE | `/api/clear-all` | Wipe all non-archived jobs |
 | GET | `/api/analytics` | Match-type counts **+ `cost` block** (per-model token totals + USD) |
+| GET | `/api/settings/status` | `{desktop, api_key_set}` — first-run probe for the desktop key modal |
+| POST | `/api/settings/api-key` | Persist Anthropic key to `<app-data>/settings.env`; 403 outside desktop mode |
 | GET/POST/PUT/DELETE | `/api/vendors[/{id}]` | Vendor IBAN/BIC CRUD |
 
 > **Auth:** when `APP_PASSWORD` is set, every route above requires HTTP Basic
@@ -280,8 +300,18 @@ DEBUG_QR_DIR=/app/data/debug_qr   # optional: save QR scan debug images
 
 **Feature flags**
 ```env
-DEV_MODE=true|false
+DEV_MODE=true|false      # desktop build excludes tests.py — leave false there
 ```
+
+**Desktop mode (branch: desktop)**
+```env
+INVOICE_DESKTOP=1        # force desktop paths when running from source (frozen builds auto-detect)
+INVOICE_PORT=8743        # fixed port (default 8743)
+INVOICE_NO_BROWSER=1     # suppress auto-open (CI smoke tests)
+```
+> Desktop config lives in `<app-data>/settings.env` (same KEY=VALUE vocabulary as `.env`);
+> real env vars always win. `DB_PATH`/`UPLOAD_DIR` defaults switch to app-data in desktop
+> mode, stay `/app/data/*` in the container.
 
 ---
 

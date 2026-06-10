@@ -2,7 +2,9 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("DB_PATH", "/app/data/invoices.db")
+import paths
+
+DB_PATH = paths.db_path()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (

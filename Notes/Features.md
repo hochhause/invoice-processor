@@ -226,6 +226,29 @@ Rationale: [[DECISIONS#Cost Tracking from Real Token Usage (model-aware)]].
 
 ---
 
+## 12. Desktop App Packaging (branch: desktop)
+
+**Implemented in:** `desktop/launcher.py`, `desktop/InvoiceProcessor.spec`, `app/paths.py`, `app/settings_store.py`, `app/main.py` (settings routes), `app/static/js/settings.js`, `.github/workflows/desktop-build.yml`
+
+**Behavior:**
+- PyInstaller `--onedir` build: recipient unzips, double-clicks `InvoiceProcessor.exe`
+  → server starts on `127.0.0.1:8743`, browser opens automatically. Close window = quit.
+- Writable data (`invoices.db`, `uploads/`, `settings.env`) lives in per-user app-data
+  (`%APPDATA%\InvoiceProcessor` / `~/Library/Application Support/InvoiceProcessor`);
+  container mode keeps `/app/data` unchanged.
+- First-run modal in the dashboard asks for the Anthropic API key
+  (`GET /api/settings/status`, `POST /api/settings/api-key`) → persisted to
+  `settings.env`, applied without restart. Key is never baked into the binary.
+- Bank account config ships via `desktop/settings.env.template` (seeded to app-data on first run).
+- pyzbar optional in `qr_swiss.py` — desktop build relies on zxing-cpp only.
+- CI: `desktop-build` workflow (manual or `desktop-v*` tag) builds + smoke-tests
+  Windows and macOS artifacts. PyInstaller can't cross-compile.
+
+Rationale: [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]].
+Docs: `desktop/README.md` (build + recipient instructions).
+
+---
+
 ## Features NOT Implemented (Out of Scope)
 
 - Rate limiting on `/api/run-llm-batch`

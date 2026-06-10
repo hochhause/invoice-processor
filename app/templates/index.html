@@ -112,6 +112,24 @@
   </div>
 </div>
 
+<!-- First-run API key modal (desktop mode only) -->
+<div id="apikey-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1100;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:24px;min-width:360px;max-width:460px;width:100%">
+    <h2 style="margin:0 0 8px;font-size:16px;font-weight:600">One-time setup</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin:0 0 14px">
+      Paste the Anthropic API key you received. It is stored only on this
+      computer and is needed for the AI invoice extraction.
+    </p>
+    <input id="apikey-input" type="password" placeholder="sk-ant-…" autocomplete="off"
+           style="width:100%;box-sizing:border-box;margin-bottom:6px">
+    <div id="apikey-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:6px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/settings.js"></script>
 <script src="/static/js/modal.js"></script>
 <script src="/static/js/dashboard.js"></script>
 <script src="/static/js/vendors.js"></script>
