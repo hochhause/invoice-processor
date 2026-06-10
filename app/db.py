@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     input_tokens     INTEGER DEFAULT 0,
     output_tokens    INTEGER DEFAULT 0,
     llm_model        TEXT DEFAULT '',
+    cdtr_street      TEXT DEFAULT '',
+    cdtr_building_no TEXT DEFAULT '',
+    cdtr_postcode    TEXT DEFAULT '',
+    cdtr_town        TEXT DEFAULT '',
+    cdtr_country     TEXT DEFAULT '',
     created_at       TEXT DEFAULT (datetime('now')),
     updated_at       TEXT DEFAULT (datetime('now'))
 );
@@ -45,7 +50,8 @@ _JOB_COLUMNS = {
     'id', 'filename', 'status', 'receiver', 'iban', 'bic', 'amount',
     'currency', 'reference', 'invoice_id', 'bank_target', 'iban_source',
     'iban_mismatch_db', 'match_type', 'input_tokens', 'output_tokens',
-    'llm_model', 'created_at', 'updated_at',
+    'llm_model', 'cdtr_street', 'cdtr_building_no', 'cdtr_postcode',
+    'cdtr_town', 'cdtr_country', 'created_at', 'updated_at',
 }
 
 
@@ -74,6 +80,30 @@ def init_db():
             conn.execute("DROP TABLE whitelist")
             print("[db] Dropped legacy whitelist table", flush=True)
 
+        # Migration tracking table — records one-time data migrations by ID
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id         TEXT PRIMARY KEY,
+                applied_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Migration: swap iban/iban_mismatch_db for document_mismatch rows.
+        # pipeline.run_vendor_check semantics flipped: iban now holds vendor IBAN
+        # (authoritative), iban_mismatch_db holds the doc-extracted IBAN (audit).
+        # Pre-existing rows have the inverse layout — swap them once.
+        _mig = 'swap_iban_mismatch_semantics_v1'
+        if not conn.execute("SELECT 1 FROM schema_migrations WHERE id=?", (_mig,)).fetchone():
+            conn.execute("""
+                UPDATE jobs
+                SET iban          = iban_mismatch_db,
+                    iban_mismatch_db = iban
+                WHERE iban_source = 'document_mismatch'
+                  AND iban          != ''
+                  AND iban_mismatch_db != ''
+            """)
+            conn.execute("INSERT INTO schema_migrations (id) VALUES (?)", (_mig,))
+
         # Migration: add later columns to existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS)
         for col_def in [
             "ALTER TABLE jobs ADD COLUMN iban_source TEXT DEFAULT ''",
@@ -82,6 +112,11 @@ def init_db():
             "ALTER TABLE jobs ADD COLUMN input_tokens INTEGER DEFAULT 0",
             "ALTER TABLE jobs ADD COLUMN output_tokens INTEGER DEFAULT 0",
             "ALTER TABLE jobs ADD COLUMN llm_model TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN cdtr_street TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN cdtr_building_no TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN cdtr_postcode TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN cdtr_town TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN cdtr_country TEXT DEFAULT ''",
         ]:
             try:
                 conn.execute(col_def)
@@ -92,13 +127,10 @@ def init_db():
 
 
 def derive_bank_target(currency: str) -> str:
-    """Route currency to bank: BKB (CHF/SEK/EUR), Raiffeisen (USD/CAD/GBP), MANUAL (other)."""
+    """Route currency to bank via config.ccy_bank_index. Unknown → MANUAL."""
+    from config import get_accounts
     c = (currency or "").upper()
-    if c in ("CHF", "SEK", "EUR"):
-        return "BKB"
-    if c in ("USD", "CAD", "GBP"):
-        return "RAIFFEISEN"
-    return "MANUAL"
+    return get_accounts()["ccy_bank_index"].get(c, "MANUAL")
 
 
 def upsert_job(job_id: str, **kwargs):
@@ -172,8 +204,10 @@ def get_jobs_by_bank(bank_target: str) -> list:
 
 def set_bank_target(job_id: str, bank_target: str):
     """Override bank_target for a job."""
-    if bank_target not in ('BKB', 'RAIFFEISEN', 'MANUAL'):
-        raise ValueError(f"Invalid bank_target: {bank_target}")
+    from config import get_accounts
+    allowed = set(get_accounts()["banks"]) | {"MANUAL"}
+    if bank_target not in allowed:
+        raise ValueError(f"Invalid bank_target: {bank_target!r}. Must be one of {sorted(allowed)}")
     with get_db() as conn:
         conn.execute(
             "UPDATE jobs SET bank_target = ?, updated_at = datetime('now') WHERE id = ?",

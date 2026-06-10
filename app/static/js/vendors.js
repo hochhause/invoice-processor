@@ -1,5 +1,10 @@
 // vendors.js — vendor IBAN database modal: list, inline-edit, add, delete
 
+function formatIban(s) {
+  if (!s) return '';
+  return s.replace(/\s/g, '').replace(/(.{4})/g, '$1 ').trim();
+}
+
 function _ve(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -31,7 +36,7 @@ async function _loadVendors() {
 function _vendorRow(v) {
   return `<tr id="vrow-${v.id}" class="vendor-row">
     <td class="vendor-cell">${_ve(v.receiver_name)}</td>
-    <td class="vendor-cell vendor-iban">${_ve(v.iban)}</td>
+    <td class="vendor-cell vendor-iban">${_ve(formatIban(v.iban))}</td>
     <td class="vendor-cell vendor-bic">${_ve(v.bic || '')}</td>
     <td class="vendor-cell vendor-actions">
       <button class="btn-icon"
@@ -51,7 +56,7 @@ function editVendorRow(btn) {
   if (!row) return;
   row.innerHTML = `
     <td class="vendor-cell"><input id="ve-r-${id}" value="${btn.dataset.receiver}" class="vendor-input"></td>
-    <td class="vendor-cell"><input id="ve-i-${id}" value="${btn.dataset.iban}" class="vendor-input vendor-iban"></td>
+    <td class="vendor-cell"><input id="ve-i-${id}" value="${_ve(formatIban(btn.dataset.iban))}" class="vendor-input vendor-iban"></td>
     <td class="vendor-cell"><input id="ve-b-${id}" value="${btn.dataset.bic}" class="vendor-input vendor-bic"></td>
     <td class="vendor-cell vendor-actions">
       <button class="btn btn-primary btn-sm" onclick="saveVendorRow('${id}')">Save</button>

@@ -2,6 +2,11 @@
 // Reads from window._jobsCache (set by dashboard.js after each poll).
 // Exports: window.openModal, window.closeModal
 
+function formatIban(s) {
+  if (!s) return '';
+  return s.replace(/\s/g, '').replace(/(.{4})/g, '$1 ').trim();
+}
+
 const MANDATORY_FIELDS = ['receiver', 'iban', 'amount', 'currency'];
 const ALL_FIELDS = ['receiver', 'invoice_id', 'amount', 'currency', 'iban', 'bic', 'reference'];
 const FIELD_IDS = {
@@ -83,7 +88,7 @@ function _updateIbanSource(job) {
   if (mismatchEl) {
     const isMismatch = job.iban_source === 'document_mismatch';
     mismatchEl.style.display = isMismatch ? '' : 'none';
-    if (mismatchDbEl) mismatchDbEl.textContent = job.iban_mismatch_db || '';
+    if (mismatchDbEl) mismatchDbEl.textContent = formatIban(job.iban_mismatch_db || '');
   }
 
   if (addVendorBtn) {

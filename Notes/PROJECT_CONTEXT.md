@@ -39,7 +39,7 @@
 ```
 invoice-processor/
 ├── app/
-│   ├── main.py              — FastAPI server + routes; _accounts() → config.get_accounts(); download route passes accounts to build_pain001 (T8); _export_blockers() three-rule gate: incomplete | unresolvable_account | cross_border_incomplete (T9) [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#Export Hard-Blocked on Incomplete Invoices]]
+│   ├── main.py              — FastAPI server + routes; _accounts() → config.get_accounts(); download route passes accounts to build_pain001 (T8); _export_blockers() three-rule gate: incomplete | unresolvable_account | cross_border_incomplete (T9); /api/accounts-summary exposes config-driven ccy→account-ccy map for export sub-totals (T13) [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#Export Hard-Blocked on Incomplete Invoices]]
 │   ├── auth.py              — Optional HTTP Basic auth (APP_PASSWORD; off when unset)
 │   ├── config.py            — Per-bank/ccy account config (load_accounts, resolve_account) [[DECISIONS#Per-Account Debtor Model]]
 │   ├── pipeline.py          — Two-function pipeline: run_qr() + run_llm()
@@ -97,7 +97,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd app && DEV_MODE=true python -c "from tests import run_startup_tests; run_startup_tests()"
 ```
-Requires env config (BKB_CURRENCIES, etc.); see [[DECISIONS#Per-Account Debtor Model (.env-driven)]]. 38 checks covering IBAN/BIC validation, pain.001 generation, multi-currency, vendor IBAN priority (space-insensitive), routing, QR mock, LLM JSON, cost tracking, config loader, **XSD validation vs SIX CH schema**. All pass when env is set.
+Requires env config (BKB_CURRENCIES, etc.); see [[DECISIONS#Per-Account Debtor Model (.env-driven)]]. Checks cover IBAN/BIC validation, pain.001 generation, multi-currency, vendor IBAN priority (space-insensitive), routing, QR mock, LLM JSON, cost tracking, config loader, the three **`.09` breaking deltas** asserted directly on emitted XML (`Tdelta`: namespace, BICFI on both agents, ReqdExctnDt/Dt), the **per-account FX mechanic** (`Tfx`: CHF+SEK share BKB-CHF IBAN, EUR own IBAN, account-ccy vs payment-ccy), and **XSD validation vs SIX CH schema** (`Txsd`). All pass when env is set. See [[DECISIONS#Test Suite (T11 DONE — Opus verify pass 2026-06-10)]].
 
 ---
 
@@ -216,6 +216,7 @@ CREATE TABLE jobs (
 | POST | `/api/run-llm-batch` | Trigger LLM on all LLM-Pending jobs |
 | POST | `/api/assign-bank/{id}` | Override bank_target |
 | GET | `/api/export-readiness` | `{ready, blockers[]}` — gate export, drive popup |
+| GET | `/api/accounts-summary` | `{BANK:{default_ccy, resolve:{ccy:acct_ccy}}}` — which debtor acct each ccy debits; drives export per-account sub-totals (T13) |
 | GET | `/api/pdf/{id}` | Serve original PDF |
 | POST | `/download/confirm` | 409 if not export-ready; else generate + zip both pain.001 files, archive |
 | GET | `/download/csv` | Export CSV |
@@ -268,7 +269,7 @@ RAIFFEISEN_CAD_BIC=RAIFCH22XXX
 RAIFFEISEN_GBP_IBAN=<CH IBAN>
 RAIFFEISEN_GBP_BIC=RAIFCH22XXX
 ```
-> `DEBTOR_IBAN` / `DEBTOR_BIC` are superseded by the per-bank keys above (T12 will clean .env.example).
+> `DEBTOR_IBAN` / `DEBTOR_BIC` are superseded by the per-bank keys above — **T12 cleaned** them out of `.env.example` (only `DEBTOR_NAME` + the per-bank/ccy keys remain). This section is the source of truth the `.env.example` body mirrors.
 
 **Paths**
 ```env

@@ -1,4 +1,9 @@
+import re
 import db
+
+
+def _norm_iban(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", s).upper()
 
 
 def lookup(receiver: str) -> dict | None:
@@ -14,6 +19,7 @@ def lookup(receiver: str) -> dict | None:
 
 
 def upsert_vendor(receiver_name: str, iban: str, bic: str = "") -> None:
+    iban = _norm_iban(iban)
     with db.get_db() as conn:
         existing = conn.execute(
             "SELECT id FROM vendors WHERE lower(receiver_name) = lower(?)",
@@ -32,6 +38,7 @@ def upsert_vendor(receiver_name: str, iban: str, bic: str = "") -> None:
 
 
 def update_vendor(vendor_id: str, receiver_name: str, iban: str, bic: str = "") -> None:
+    iban = _norm_iban(iban)
     with db.get_db() as conn:
         conn.execute(
             "UPDATE vendors SET receiver_name = ?, iban = ?, bic = ?, updated_at = datetime('now') WHERE id = ?",

@@ -273,7 +273,9 @@ RAIFFEISEN_{USD,CAD,GBP}_IBAN/BIC
 - PmtInf is grouped per **transaction currency** (keeps `CtrlSum` single-currency-correct). `DbtrAcct/Ccy` = account currency; per-tx `InstdAmt/Ccy` = payment currency — an FX payment when they differ.
 - Unknown currency → `MANUAL`; operator may drag it into a bank column → it then resolves to that bank's default account.
 
-**Location:** `app/config.py` (**T1 done** — `load_accounts`, `get_accounts`, `resolve_account`, `_clear_cache`; **T4** extended `resolve_account(bank, ccy, cfg=None)` to also return the resolved *account* `ccy` and to resolve against an explicitly-passed config, keeping `build_pain001` pure — one source of truth, no drift); `app/db.py:derive_bank_target` (**T2 done** — config-driven via `ccy_bank_index`); `app/xml_export.py:build_pain001` (**T4 done** — signature `build_pain001(jobs, accounts, bank)`; each ccy PmtInf draws `DbtrAcct`/`DbtrAgt` from `resolve_account(bank, ccy)`, `DbtrAcct/Ccy`=account ccy, per-tx `InstdAmt/Ccy`=payment ccy; raises `ValueError` if a payable (bank,ccy) has no resolvable IBAN+BIC — defensive, T9 gates upstream); `app/main.py:_accounts` (**T8 done** — `_debtor()` replaced by `_accounts()` = `config.get_accounts()`; download route passes the full accounts dict to both `build_pain001` calls; export path is fully wired).
+**Location:** `app/config.py` (**T1 done** — `load_accounts`, `get_accounts`, `resolve_account`, `_clear_cache`; **T4** extended `resolve_account(bank, ccy, cfg=None)` to also return the resolved *account* `ccy` and to resolve against an explicitly-passed config, keeping `build_pain001` pure — one source of truth, no drift); `app/db.py:derive_bank_target` (**T2 done** — config-driven via `ccy_bank_index`); `app/xml_export.py:build_pain001` (**T4 done** — signature `build_pain001(jobs, accounts, bank)`; each ccy PmtInf draws `DbtrAcct`/`DbtrAgt` from `resolve_account(bank, ccy)`, `DbtrAcct/Ccy`=account ccy, per-tx `InstdAmt/Ccy`=payment ccy; raises `ValueError` if a payable (bank,ccy) has no resolvable IBAN+BIC — defensive, T9 gates upstream); `app/main.py:_accounts` (**T8 done** — `_debtor()` replaced by `_accounts()` = `config.get_accounts()`; download route passes the full accounts dict to both `build_pain001` calls; export path is fully wired); `app/main.py:accounts_summary` + `app/static/js/export.js` (**T13 done** — read-only `GET /api/accounts-summary` returns `{BANK:{default_ccy, resolve:{ccy:acct_ccy}}}` from the **same** `config.resolve_account`, so the export board can show *which* debtor account each currency block debits — SEK under "CHF acct ⇄" (FX), EUR under "EUR acct" — with no hardcoded map and no drift from routing/`build_pain001`).
+
+**T12 — `.env.example` (done, operator-applied):** the per-account keys (`DEBTOR_NAME`, `{BANK}_CURRENCIES`, `{BANK}_DEFAULT_CCY`, `{BANK}_{CCY}_IBAN/BIC`) replace the single global `DEBTOR_IBAN`/`DEBTOR_BIC`, which are dropped. `.env.example` lives in a sandbox-denied path → the full body is delivered to the operator for paste; [[PROJECT_CONTEXT#Environment Variables]] is the mirrored source of truth.
 
 ---
 
@@ -316,9 +318,15 @@ RAIFFEISEN_{USD,CAD,GBP}_IBAN/BIC
 
 ---
 
-## Test Suite (T11 DONE)
+## Test Suite (T11 DONE — Opus verify pass 2026-06-10)
 
-**XSD Validation (pain.001.001.09):** Startup self-tests (DEV_MODE=true, 38 checks) validate all `.09` structural deltas against the SIX CH XSD (`app/schemas/pain.001.001.09.ch.03.xsd`). Txsd checks confirm CHF domestic and multi-currency (EUR) output is valid. Guarded import: xmlschema is optional (lands with T10 via requirements.txt); skips gracefully if absent. All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD validation]]).
+**XSD Validation (pain.001.001.09):** Startup self-tests (DEV_MODE=true) validate the `.09` output against the SIX CH XSD (`app/schemas/pain.001.001.09.ch.03.xsd`). `Txsd` confirms CHF domestic and multi-currency (EUR) output is valid. Guarded import: xmlschema is optional (lands with T10 via requirements.txt); skips gracefully if absent.
+
+**Direct delta + FX assertions (added in verify pass):** the XSD catches the `.09` deltas only *indirectly*. Two assertion blocks now pin them on the emitted XML so a regression names itself instead of surfacing as a generic "XSD invalid":
+- `Tdelta-a..f` — namespace urn, `BICFI` on **both** DbtrAgt + CdtrAgt agents, **no legacy `<BIC>`** element survives, and `ReqdExctnDt` wraps `<Dt>` (not a bare date).
+- `Tfx-a..f` — the per-account FX mechanic: in a BKB file, CHF + SEK PmtInf blocks both debit the **BKB-CHF IBAN** (SEK falls back to default), EUR debits its **own BKB-EUR IBAN**, and the SEK block carries `DbtrAcct/Ccy=CHF` (account ccy) vs `InstdAmt/@Ccy=SEK` (payment ccy) — confirming FX is represented correctly.
+
+All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD validation]]). Prior Haiku done-note had cited line numbers for these assertions that did not in fact exist (they pointed at ChrgBr/config-resolver tests); corrected here.
 
 ---
 

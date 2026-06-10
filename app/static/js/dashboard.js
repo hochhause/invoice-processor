@@ -1,5 +1,10 @@
 // dashboard.js — table polling, upload zone, row actions, LLM batch button
 
+function formatIban(s) {
+  if (!s) return '';
+  return s.replace(/\s/g, '').replace(/(.{4})/g, '$1 ').trim();
+}
+
 const POLL_STATUSES = new Set(['LLM-Pending', 'needs_review']);
 
 let pollTimer = null;
@@ -121,7 +126,7 @@ function buildRow(job, idx) {
     <td class="cell-receiver" title="${esc(job.receiver || '')}">${esc(job.receiver || '')}</td>
     <td class="cell-amount">${esc(job.amount || '')}</td>
     <td class="cell-currency">${esc(job.currency || '')}</td>
-    <td class="cell-iban">${esc(job.iban || '')} ${ibanSourceChip(job.iban_source || '', job.iban_mismatch_db || '')}</td>
+    <td class="cell-iban">${esc(formatIban(job.iban || ''))} ${ibanSourceChip(job.iban_source || '', job.iban_mismatch_db || '')}</td>
     <td>${bankChip(job.bank_target || '')}</td>
     <td class="cell-actions">
       <button class="btn-icon" title="Edit" onclick="openModal('${job.id}', ${idx}, ${(window._jobsCache || []).length})">✎</button>
@@ -153,7 +158,7 @@ function ibanSourceChip(source, mismatchDb) {
   };
   if (!source || !map[source]) return '';
   const [cls, label] = map[source];
-  const title = source === 'document_mismatch' && mismatchDb ? `DB has: ${mismatchDb}` : source;
+  const title = source === 'document_mismatch' && mismatchDb ? `doc read: ${formatIban(mismatchDb)}` : source;
   return `<span class="chip ${cls}" title="${esc(title)}">${label}</span>`;
 }
 

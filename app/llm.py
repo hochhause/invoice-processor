@@ -9,7 +9,12 @@ NO code fences, NO explanation. Start with { and end with }.
 
 Fields (all required, use null if missing):
 invoice_id, receiver, amount (decimal string e.g. "1234.56"), currency (ISO 4217),
-due_date (YYYY-MM-DD), iban (uppercase no spaces), bic, reference
+due_date (YYYY-MM-DD), iban (uppercase no spaces), bic, reference,
+cdtr_street (street name only, no building number),
+cdtr_building_no (building or house number as a string),
+cdtr_postcode (postal/ZIP code),
+cdtr_town (city or town name),
+cdtr_country (ISO 3166-1 alpha-2 two-letter code e.g. "CH", "DE", "US")
 
 Rules: all keys must be present; use null not empty string; if due_date cannot
 be parsed to YYYY-MM-DD use null.
@@ -17,8 +22,11 @@ IMPORTANT: "receiver" is the payee (the company being paid). NEVER set receiver 
 "Lyfegen", "Lyfegen HealthTech AG", "Lyfegen Health Tech AG", or any name that
 contains "Lyfegen" — that is the paying company. If only a Lyfegen entity appears,
 set receiver to null.
+Address fields (cdtr_*) are the receiver's address as printed on the invoice;
+set all to null when no address appears. cdtr_country MUST be a 2-letter ISO code
+or null — never a full country name.
 
-Example: {"invoice_id":"INV-001","receiver":"Acme","amount":"1500.00","currency":"USD","due_date":"2024-12-31","iban":null,"bic":null,"reference":null}"""
+Example: {"invoice_id":"INV-001","receiver":"Acme","amount":"1500.00","currency":"USD","due_date":"2024-12-31","iban":null,"bic":null,"reference":null,"cdtr_street":null,"cdtr_building_no":null,"cdtr_postcode":null,"cdtr_town":null,"cdtr_country":null}"""
 
 _CACHED_SYSTEM = [{"type": "text", "text": PROMPT, "cache_control": {"type": "ephemeral"}}]
 

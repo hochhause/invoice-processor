@@ -132,11 +132,14 @@ def run_vendor_check(fields: dict) -> dict:
 
     extracted_iban = fields.get("iban", "")
     if extracted_iban:
-        if extracted_iban == vendor["iban"]:
+        if _norm_iban(extracted_iban) == _norm_iban(vendor["iban"]):
             fields["iban_source"] = "document"
         else:
+            # Vendor table is authoritative: override extracted IBAN+BIC, preserve doc IBAN for audit.
+            fields["iban_mismatch_db"] = extracted_iban
+            fields["iban"] = vendor["iban"]
+            fields["bic"] = vendor["bic"] or fields.get("bic", "")
             fields["iban_source"] = "document_mismatch"
-            fields["iban_mismatch_db"] = vendor["iban"]
     else:
         fields["iban"] = vendor["iban"]
         fields["bic"] = vendor["bic"] or fields.get("bic", "")
@@ -145,9 +148,13 @@ def run_vendor_check(fields: dict) -> dict:
     return fields
 
 
+def _norm_iban(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", s).upper()
+
+
 def _validate_iban(iban: str) -> bool:
     """MOD-97 checksum validation."""
-    iban = re.sub(r"[^A-Za-z0-9]", "", iban).upper()
+    iban = _norm_iban(iban)
     if len(iban) < 5:
         return False
     rearranged = iban[4:] + iban[:4]

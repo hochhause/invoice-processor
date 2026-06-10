@@ -19,6 +19,7 @@ import csv
 import io
 import logging
 import os
+import re
 import uuid
 import zipfile
 from pathlib import Path
@@ -38,6 +39,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import config
 import cost
 import db
 import pipeline
@@ -54,10 +56,12 @@ PERSIST_KEYS = {
     "reference", "invoice_id", "bank_target", "status",
     "iban_source", "iban_mismatch_db", "match_type",
     "input_tokens", "output_tokens", "llm_model",
+    "cdtr_street", "cdtr_building_no", "cdtr_postcode", "cdtr_town", "cdtr_country",
 }
 # Editable fields accepted by the review form.
 REVIEW_FIELDS = ["invoice_id", "receiver", "amount", "currency",
-                 "iban", "bic", "reference"]
+                 "iban", "bic", "reference",
+                 "cdtr_street", "cdtr_building_no", "cdtr_postcode", "cdtr_town", "cdtr_country"]
 MANDATORY = ["receiver", "iban", "amount", "currency"]
 
 
@@ -82,12 +86,8 @@ templates = Jinja2Templates(directory="templates")
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _debtor() -> dict:
-    return {
-        "name": os.getenv("DEBTOR_NAME", "My Company"),
-        "iban": os.getenv("DEBTOR_IBAN", ""),
-        "bic": os.getenv("DEBTOR_BIC", ""),
-    }
+def _accounts() -> dict:
+    return config.get_accounts()
 
 
 def _jobs_needing_llm() -> list:
@@ -115,19 +115,67 @@ def _run_llm_batch(jobs: list):
 
 
 def _export_blockers() -> list:
-    """Non-archived jobs that block export: bad status or missing mandatory
-    pain.001 fields. Returns one entry per blocking job for the UI popup."""
+    """Non-archived jobs that block export.
+
+    Checks (in priority order, first match wins):
+    1. Bad status or missing mandatory pain.001 fields (pre-existing rule).
+    2. Routed job (BKB/RAIFFEISEN) whose (bank, ccy) resolves to no configured
+       debtor account — would raise ValueError in build_pain001.
+    3. Cross-border job (RAIFFEISEN) missing creditor BIC or country — required
+       for SWIFT payments; bank rejects the file without them.
+
+    Each entry carries ``blocker_type`` for richer UI messages (backwards-compat
+    — existing callers that ignore unknown fields are unaffected).
+    """
     blocking_status = ("needs_review", "error", "LLM-Pending")
     blockers = []
+    accounts = config.get_accounts()
+
     for j in db.get_jobs(include_archived=False):
+        jid = j["id"]
+        fname = j.get("filename", "")
+        status = j.get("status", "")
+
+        # Rule 1 — existing hard-block (do not regress)
         missing = [f for f in MANDATORY if not (j.get(f) or "").strip()]
-        if missing or j.get("status") in blocking_status:
+        if missing or status in blocking_status:
             blockers.append({
-                "id": j["id"],
-                "filename": j.get("filename", ""),
-                "status": j.get("status", ""),
-                "missing": missing,
+                "id": jid, "filename": fname, "status": status,
+                "missing": missing, "blocker_type": "incomplete",
             })
+            continue
+
+        bank = (j.get("bank_target") or "").upper()
+        ccy = (j.get("currency") or "").upper()
+
+        # Rule 2 — debtor account unresolvable for this (bank, ccy)
+        if bank in accounts["banks"] and ccy:
+            acct = config.resolve_account(bank, ccy, accounts)
+            if not acct or not acct.get("iban") or not acct.get("bic"):
+                blockers.append({
+                    "id": jid, "filename": fname, "status": status,
+                    "missing": ["debtor_account"],
+                    "blocker_type": "unresolvable_account",
+                })
+                continue
+
+        # Rule 3 — SWIFT payment missing creditor BIC or valid ISO-2 country
+        _, add_swift = xml_export._get_service_level(ccy, bank)
+        if add_swift:
+            xb_missing = [
+                f for f in ("bic",)
+                if not (j.get(f) or "").strip()
+            ]
+            country = (j.get("cdtr_country") or "").strip()
+            if not re.match(r'^[A-Z]{2}$', country):
+                xb_missing.append("cdtr_country")
+            if xb_missing:
+                blockers.append({
+                    "id": jid, "filename": fname, "status": status,
+                    "missing": xb_missing,
+                    "blocker_type": "cross_border_incomplete",
+                })
+
     return blockers
 
 
@@ -206,9 +254,10 @@ async def save_review(job_id: str, request: Request):
         fields["status"] = "needs_review"
     # else: leave existing status untouched (e.g. QR-processed stays as-is)
 
-    # Operator save = manual IBAN source; clear mismatch flag
-    fields["iban_source"] = "manual"
-    fields["iban_mismatch_db"] = ""
+    # Only reset mismatch audit when operator explicitly changes the IBAN value
+    if "iban" in fields and (fields["iban"] or "").strip() != (job.get("iban") or "").strip():
+        fields["iban_source"] = "manual"
+        fields["iban_mismatch_db"] = ""
 
     db.upsert_job(job_id, **fields)
     return JSONResponse({"ok": True})
@@ -371,6 +420,33 @@ async def export_readiness():
     return JSONResponse({"ready": not blockers, "blockers": blockers})
 
 
+@app.get("/api/accounts-summary")
+async def accounts_summary():
+    """Per-bank account-resolution map for the export UI.
+
+    Lets the export board show *which debtor account* each currency block
+    debits (e.g. SEK → BKB-CHF account) without duplicating the resolution
+    rule on the frontend. Config-driven — same `config.resolve_account` that
+    `derive_bank_target`/`build_pain001` use, so there is no drift.
+
+    Shape: ``{BANK: {default_ccy, resolve: {ccy: account_ccy}}}``. A currency
+    dragged into a bank that is not in its CURRENCIES list is not listed here;
+    the frontend falls back to ``default_ccy`` for it (mirrors the resolver)."""
+    cfg = config.get_accounts()
+    out = {}
+    for bank in cfg["banks"]:
+        resolve = {}
+        for ccy in sorted(cfg["currencies"].get(bank, set())):
+            acct = config.resolve_account(bank, ccy, cfg)
+            if acct:
+                resolve[ccy] = acct.get("ccy", ccy)
+        out[bank] = {
+            "default_ccy": cfg["defaults"].get(bank, ""),
+            "resolve": resolve,
+        }
+    return JSONResponse(out)
+
+
 @app.post("/download/confirm")
 async def download_confirm():
     """Generate pain.001 for BKB + Raiffeisen, zip them, archive sorted jobs.
@@ -386,25 +462,25 @@ async def download_confirm():
             status_code=409,
         )
 
-    debtor = _debtor()
-    bkb_jobs = db.get_jobs_by_bank("BKB")
-    raiff_jobs = db.get_jobs_by_bank("RAIFFEISEN")
+    accounts = _accounts()
+    banks = accounts["banks"]
 
-    if not bkb_jobs and not raiff_jobs:
+    jobs_by_bank = {bank: db.get_jobs_by_bank(bank) for bank in banks}
+    all_jobs = [j for jobs in jobs_by_bank.values() for j in jobs]
+
+    if not all_jobs:
         return JSONResponse({"error": "no sorted jobs to export"}, status_code=400)
 
     files = []
     try:
-        if bkb_jobs:
-            files.append(("pain001_BKB.xml",
-                          xml_export.build_pain001(bkb_jobs, debtor, bank="BKB")))
-        if raiff_jobs:
-            files.append(("pain001_Raiffeisen.xml",
-                          xml_export.build_pain001(raiff_jobs, debtor, bank="RAIFFEISEN")))
+        for bank, jobs in jobs_by_bank.items():
+            if jobs:
+                files.append((f"pain001_{bank}.xml",
+                              xml_export.build_pain001(jobs, accounts, bank=bank)))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    db.archive_jobs([j["id"] for j in bkb_jobs + raiff_jobs])
+    db.archive_jobs([j["id"] for j in all_jobs])
     return _zip_response(files)
 
 

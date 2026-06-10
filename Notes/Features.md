@@ -75,7 +75,7 @@
 
 **Layout:**
 - Three columns (BKB, Raiffeisen, Manual) for drag-board
-- Each column shows jobs, grouped by currency (with running amount totals)
+- Each column shows jobs; column header shows running amount sub-totals **grouped by the debtor account each block debits** (T13): e.g. BKB renders `CHF acct ← CHF … · SEK … ⇄` and `EUR acct ← EUR …`, where `⇄` flags an FX block (payment ccy ≠ account ccy, e.g. SEK debiting the CHF account). Resolution is config-driven via `GET /api/accounts-summary` — no hardcoded map, same `config.resolve_account` as routing/`build_pain001`.
 - Header buttons: "Export →" (navigates here), back link
 
 **User flow:**
@@ -90,19 +90,23 @@
    - Otherwise → generates pain.001 files, archives sorted jobs, returns zip
 6. Toast shows "✓ N invoices archived" then redirects to dashboard
 
-**Export readiness gate:** Incomplete/review-pending invoices **hard-block** export
-(payment-correctness). Unrouted-but-complete `MANUAL` invoices are excluded with
-confirmation, not blocked. See [[DECISIONS#Export Hard-Blocked on Incomplete Invoices]].
+**Export readiness gate (T9 done):** Three hard-block rules — all enforced by `_export_blockers()` in `app/main.py`:
+1. **Incomplete** — status `{needs_review, error, LLM-Pending}` or missing mandatory field (`receiver`, `iban`, `amount`, `currency`).
+2. **Unresolvable debtor account** — job is routed (`BKB`/`RAIFFEISEN`) but `config.resolve_account(bank, ccy)` returns no configured IBAN+BIC (including default fallback).
+3. **Cross-border gap** — `RAIFFEISEN` job missing creditor `bic` or `cdtr_country` (required for SWIFT).
+
+Cards matching rule 2 or 3 are **greyed + undraggable** on the export board (`export.js: blockedIds`), identical visual treatment to `needs_review` but with a different tooltip. `blockedIds` is refreshed after each drag+drop (reassignment can change resolvability). `MANUAL` cards remain draggable (unknown-ccy → drag into bank → resolves to default account via T1). See [[DECISIONS#Export Hard-Blocked on Incomplete Invoices]], [[Plan#T9 — Export gating]].
 
 **APIs:**
 - `GET /api/jobs` (load jobs)
 - `GET /api/export-readiness` (`{ready, blockers[]}` — gate the button + drive popup)
+- `GET /api/accounts-summary` (per-bank `ccy → account-ccy` map — drives per-account sub-totals; T13)
 - `POST /api/assign-bank/{id}` (reassign bank)
 - `POST /download/confirm` (409 + `blockers[]` if not ready; else generate, archive, zip)
 
 ---
 
-## 6. pain.001 XML Export (per bank)
+## 6. pain.001 XML Export (per bank, per account)
 
 **Implemented in:** Step 5 (`app/xml_export.py`), Step 4 (`app/main.py`)
 
@@ -115,6 +119,16 @@ confirmation, not blocked. See [[DECISIONS#Export Hard-Blocked on Incomplete Inv
 - Groups PmtInf blocks by currency (ISO 20022 requirement)
 - Applies correct service level codes per bank + currency
 - Raises HTTP 400 if no jobs match filter (no empty files)
+
+**In-progress rework (export-rework plan — see [[Plan]]):**
+- ✅ Upgrade schema `pain.001.001.03` → `pain.001.001.09` (SIX CH XSD) — **T3 done**: namespace/schemaLocation, `BIC`→`BICFI` (Dbtr+Cdtr agents), `ReqdExctnDt` wraps `<Dt>`; output XSD-validated in startup tests (guarded `Txsd-*`, active once `xmlschema` ships in T10)
+- ✅ Per-account `DbtrAcct`/`DbtrAgt` per currency block — **T4 done**: `build_pain001(jobs, accounts, bank)` resolves each ccy PmtInf via `config.resolve_account(bank, ccy)`; `DbtrAcct/Ccy` = *account* currency (SEK→CHF fallback debits BKB-CHF IBAN with `Ccy=CHF`), per-tx `InstdAmt/Ccy` = payment currency (FX); `DbtrAgt/BICFI` from the resolved account (no more empty `<BICFI/>`). SEK+EUR output XSD-validated vs SIX CH XSD. See [[DECISIONS#Per-Account Debtor Model]].
+- ✅ Cross-border conformance — **T5 done**: `ChrgBr` at PmtInf level (SEPA→`SLEV`, SWIFT→`SHAR`, CHF domestic omitted); `_cdtr_address` emits structured `Cdtr/PstlAdr` (`StrtNm`,`BldgNb`,`PstCd`,`TwnNm`,`Ctry`) when `cdtr_*` fields present (silent no-op until T7 persists them). Output remains XSD-valid. See [[DECISIONS#pain.001.001.09 Migration]].
+- ✅ LLM extracts creditor address — **T6 done**: `PROMPT` in `app/llm.py` extended with 5 new keys (`cdtr_street`, `cdtr_building_no`, `cdtr_postcode`, `cdtr_town`, `cdtr_country` ISO-2); all null-safe; fields flow through pipeline but are dropped by `PERSIST_KEYS` until T7 adds DB columns.
+- ✅ DB columns + migration — **T7 done**: `cdtr_street/building_no/postcode/town/country` added to `jobs` table (`SCHEMA`, `_JOB_COLUMNS`, ALTER TABLE migrations in `init_db`). `PERSIST_KEYS` + `REVIEW_FIELDS` in `main.py` updated — LLM address output now persists; operators can manually correct via review form. Existing rows default to `''` (no PstlAdr emitted until re-extracted or edited). See [[DECISIONS#pain.001.001.09 Migration]].
+- Accounts loaded from `.env` via `app/config.py` → `resolve_account(bank, ccy)`
+- ✅ Route wiring, export gating, deps/XSD, tests — **T8–T11 done** (`_accounts()` in download route; three-rule blocker gate; `xmlschema` + SIX CH XSD; full startup assertion suite incl. `Tdelta`/`Tfx`/`Txsd`)
+- ✅ Trailing docs/config — **T12** (`.env.example` cleaned: per-bank keys, no `DEBTOR_IBAN`/`DEBTOR_BIC`), **T13** (per-account export sub-totals via `/api/accounts-summary`), **T14** (this doc sync). **T0–T14 complete.**
 
 **API:** `POST /download/confirm` (triggered from export screen)
 
