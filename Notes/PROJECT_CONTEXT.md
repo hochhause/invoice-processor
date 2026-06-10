@@ -15,6 +15,7 @@
 | zxingcpp | latest | QR fallback decoder |
 | pymupdf/fitz | latest | PDF page rendering to PNG (for LLM vision) |
 | anthropic | latest | Claude Haiku API client (structured extraction) |
+| xmlschema | >=2.4.0 | pain.001.001.09 XSD validation (T10) — pure-Python, no libxml2 build |
 | SQLite3 | bundled | Job database |
 | Jinja2 | latest | Template rendering |
 
@@ -38,12 +39,13 @@
 ```
 invoice-processor/
 ├── app/
-│   ├── main.py              — FastAPI server + routes (HTTP Basic auth gate)
+│   ├── main.py              — FastAPI server + routes; _accounts() → config.get_accounts(); download route passes accounts to build_pain001 (T8); _export_blockers() three-rule gate: incomplete | unresolvable_account | cross_border_incomplete (T9) [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#Export Hard-Blocked on Incomplete Invoices]]
 │   ├── auth.py              — Optional HTTP Basic auth (APP_PASSWORD; off when unset)
+│   ├── config.py            — Per-bank/ccy account config (load_accounts, resolve_account) [[DECISIONS#Per-Account Debtor Model]]
 │   ├── pipeline.py          — Two-function pipeline: run_qr() + run_llm()
-│   ├── llm.py               — Claude client: extract_text_stage/extract_image_stage → (fields, usage)
+│   ├── llm.py               — Claude client: extract_text_stage/extract_image_stage → (fields, usage); PROMPT extracts 13 keys incl. cdtr_* address fields (T6) [[DECISIONS#LLM Returns Structured JSON (not raw OCR text)]]
 │   ├── cost.py              — Per-model token pricing + estimate_cost()
-│   ├── xml_export.py        — ISO 20022 pain.001 generator (per-bank filtering)
+│   ├── xml_export.py        — ISO 20022 pain.001.001.09 generator: build_pain001(jobs, accounts, bank); per-ccy PmtInf debits config.resolve_account(bank, ccy) (DbtrAcct/Ccy=account ccy, InstdAmt/Ccy=payment ccy/FX); ChrgBr at PmtInf level (SEPA→SLEV, SWIFT→SHAR); structured Cdtr/PstlAdr (_cdtr_address); validates vs SIX CH XSD; T9 blockers gate upstream [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#pain.001.001.09 Migration]]
 │   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder
 │   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage)
 │   ├── tests.py             — Startup self-tests (DEV_MODE)
@@ -163,6 +165,11 @@ CREATE TABLE jobs (
   input_tokens     INTEGER DEFAULT 0,  -- LLM cost tracking
   output_tokens    INTEGER DEFAULT 0,
   llm_model        TEXT DEFAULT '',    -- model that produced this job (drives cost.estimate_cost)
+  cdtr_street      TEXT DEFAULT '',    -- creditor address for cross-border pain.001 (T7) [[DECISIONS#pain.001.001.09 Migration]]
+  cdtr_building_no TEXT DEFAULT '',
+  cdtr_postcode    TEXT DEFAULT '',
+  cdtr_town        TEXT DEFAULT '',
+  cdtr_country     TEXT DEFAULT '',    -- ISO 3166-1 alpha-2 or ''
   created_at       TEXT DEFAULT (datetime('now')),
   updated_at       TEXT DEFAULT (datetime('now'))
 );
@@ -171,6 +178,9 @@ CREATE TABLE jobs (
 > Note: `due_date` is **not** a column — it is parsed transiently for the pain.001
 > `ReqdExctnDt` but not persisted. A separate `vendors` table holds receiver→IBAN/BIC.
 > Token columns feed the cost tracker (see [[DECISIONS]]).
+> `cdtr_*` columns added by T7 — supply the structured `Cdtr/PstlAdr` emitted by
+> `_cdtr_address` in `xml_export.py`; existing rows default to `''` (silently no
+> address emitted until re-extracted or edited). See [[DECISIONS#pain.001.001.09 Migration]].
 
 **Status enum:**
 - `QR-processed` — QR scan succeeded
@@ -180,10 +190,11 @@ CREATE TABLE jobs (
 - `archived` — exported, hidden from main view
 - `error` — extraction failed
 
-**bank_target auto-routing (via `derive_bank_target()`):**
-- CHF, SEK, EUR → `BKB`
-- USD, CAD, GBP → `RAIFFEISEN`
-- other → `MANUAL`
+**bank_target auto-routing (via `derive_bank_target()` — config-driven since T2):**
+- Looks up `config.get_accounts()["ccy_bank_index"]` — the ccy→bank map built from `{BANK}_CURRENCIES` env keys.
+- Unknown ccy (not in any bank's CURRENCIES list) → `MANUAL`.
+- Default mapping (when `.env` uses the standard config): CHF/SEK/EUR → `BKB`; USD/CAD/GBP → `RAIFFEISEN`.
+- See [[DECISIONS#Per-Account Debtor Model]].
 
 ---
 
@@ -229,12 +240,29 @@ APP_PASSWORD=          # set → every page + API route requires HTTP Basic; uns
 APP_USERNAME=admin     # optional, defaults to "admin"
 ```
 
-**Debtor (for pain.001)**
+**Debtor + per-account config (for pain.001) — see [[DECISIONS#Per-Account Debtor Model]]**
 ```env
 DEBTOR_NAME=Lyfegen HealthTech AG
-DEBTOR_IBAN=CH5604835012345678009
-DEBTOR_BIC=BLKBCH22
+
+# BKB: CHF domestic + SEPA (SEK/EUR fall back to CHF account)
+BKB_CURRENCIES=CHF,EUR,SEK
+BKB_DEFAULT_CCY=CHF
+BKB_CHF_IBAN=<CH IBAN>
+BKB_CHF_BIC=BLKBCH22
+BKB_EUR_IBAN=<CH IBAN>
+BKB_EUR_BIC=BLKBCH22
+
+# Raiffeisen: cross-border (CAD/GBP fall back to USD account)
+RAIFFEISEN_CURRENCIES=USD,CAD,GBP
+RAIFFEISEN_DEFAULT_CCY=USD
+RAIFFEISEN_USD_IBAN=<CH IBAN>
+RAIFFEISEN_USD_BIC=RAIFCH22XXX
+RAIFFEISEN_CAD_IBAN=<CH IBAN>
+RAIFFEISEN_CAD_BIC=RAIFCH22XXX
+RAIFFEISEN_GBP_IBAN=<CH IBAN>
+RAIFFEISEN_GBP_BIC=RAIFCH22XXX
 ```
+> `DEBTOR_IBAN` / `DEBTOR_BIC` are superseded by the per-bank keys above (T12 will clean .env.example).
 
 **Paths**
 ```env
