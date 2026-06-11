@@ -337,3 +337,16 @@ See [[DECISIONS]] for full rationale. Summary:
 7. Unsorted invoices excluded from export (not blocking — operator confirms)
 8. HTTP Basic auth (single shared `APP_PASSWORD`), disabled when env unset — see [[DECISIONS]]
 9. Cost tracker from real API token usage; model-aware pricing → Sonnet switch is config-only
+10. Testing phase: dev tunnel (`lyfegen-invoice-test`, Entra-tenant-gated) instead of deploy — see [[DECISIONS#Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)]]
+
+---
+
+## Testing-Phase Access (branch: desktop)
+
+- `scripts/start-test-tunnel.ps1` — starts `dist\InvoiceProcessor\InvoiceProcessor.exe`
+  (INVOICE_NO_BROWSER=1) + hosts dev tunnel `lyfegen-invoice-test` (port 8743);
+  prereq one-time commands in the script header (`devtunnel create/port/access --tenant`).
+- `docs/confluence/invoice-processor-user-guide.html` — tester-facing Confluence page
+  (storage format); `docs/confluence/README.md` — how to publish + URL check.
+- Tunnel URL: `https://x3m2th39-8743.euw.devtunnels.ms` (stable; stored on the persistent
+  tunnel `lyfegen-invoice-test.euw` — changes only if the tunnel is deleted + recreated).

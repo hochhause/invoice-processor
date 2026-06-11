@@ -280,6 +280,25 @@ Rationale: [[DECISIONS#In-App Settings + Config-Driven Bank UI (branch: desktop)
 
 ---
 
+## 14. Testing-Phase Remote Access + User Guide (branch: desktop)
+
+**Implemented in:** `scripts/start-test-tunnel.ps1`, `docs/confluence/invoice-processor-user-guide.html`, `docs/confluence/README.md`
+
+**Behavior:**
+- One command (`.\scripts\start-test-tunnel.ps1`) starts the built exe on 127.0.0.1:8743
+  (no local browser tab) and hosts the persistent dev tunnel `lyfegen-invoice-test`;
+  Ctrl-C stops tunnel + app.
+- Testers open the stable `*.devtunnels.ms` URL and sign in with their Lyfegen
+  Microsoft account (tenant-gated; first visit shows Microsoft's "Continue" interstitial).
+- Confluence user guide (storage-format HTML) covers: workflow, all 6 statuses, every
+  needs_review trigger + fix, troubleshooting table, full settings reference, security
+  measures (tenant gating, TLS, local data, Anthropic API terms, Azure outlook),
+  test-phase limitations.
+
+Rationale: [[DECISIONS#Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)]].
+
+---
+
 ## Features NOT Implemented (Out of Scope)
 
 - Rate limiting on `/api/run-llm-batch`

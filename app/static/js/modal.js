@@ -166,6 +166,12 @@ function closeModalOnBackdrop(e) {
   if (e.target === e.currentTarget) closeModal();
 }
 
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('modal').classList.contains('open')) {
+    closeModal();
+  }
+});
+
 async function saveModal() {
   const jobId = document.getElementById('modal-job-id').value;
   if (!jobId) return;

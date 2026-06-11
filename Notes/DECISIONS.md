@@ -380,6 +380,24 @@ All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD valid
 
 ---
 
+## Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)
+
+**Decision:** Before the .exe rollout, testers reach the app through a **persistent Microsoft Dev Tunnel** (`lyfegen-invoice-test`, port 8743) hosted from the operator's machine, **access-gated to the Lyfegen Entra/M365 tenant** (`devtunnel access create … --tenant`). `APP_PASSWORD` stays **off** during this phase. Tool was mandated; access model + no-shared-password were chosen deliberately.
+
+**Why:**
+- Tenant gating > shared password for finance data: individual corporate sign-in, centrally revocable, no secret to leak; the Microsoft relay terminates TLS 1.2+ end to end.
+- Persistent named tunnel → stable URL testers bookmark once (`https://lyfegen-invoice-test-8743.<cluster>.devtunnels.ms`); temporary tunnels regenerate URLs per run.
+- App runs as the **built exe** (`dist\InvoiceProcessor\InvoiceProcessor.exe`) so the test exercises the real deployment artifact.
+
+**Accepted trade-offs:**
+- R availability = operator machine awake + `devtunnel host` running; testers see "page unreachable" otherwise (documented as expected).
+- R desktop mode ⇒ settings popup is editable by **every** tester (shared `settings.env`); doc instructs not to touch. Single shared workspace (all testers see all invoices).
+- N tunnel idles out after 30 days inactivity; tenant access grant expires ≤30 days → re-run `devtunnel access create … --tenant` on "access denied".
+
+**Location:** `scripts/start-test-tunnel.ps1` (one-command app+tunnel bringup, prereq commands in header), `docs/confluence/invoice-processor-user-guide.html` (tester-facing guide, Confluence storage format incl. security section), `docs/confluence/README.md` (publish instructions). See [[Features#14. Testing-Phase Remote Access + User Guide (branch: desktop)]].
+
+---
+
 ## Notable TODOs / Gaps
 
 **[MISSING]** Rate limiting on `/api/run-llm-batch` — could accidentally trigger multiple concurrent LLM batches if clicked twice. Add a lock flag in DB (`llm_batch_running`).
