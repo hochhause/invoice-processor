@@ -1,8 +1,16 @@
 import anthropic, base64, fitz, json, os, re, time
 
-MODEL      = os.environ.get("LLM_MODEL",      "claude-haiku-4-5-20251001")
-TEXT_MODEL = os.environ.get("LLM_MODEL_TEXT", "claude-haiku-4-5-20251001")
-USE_BATCH  = os.environ.get("LLM_USE_BATCH",  "false").lower() == "true"
+# Models resolved per call (not import time) so the desktop settings popup
+# can switch models without a restart.
+def _model() -> str:
+    return os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001")
+
+
+def _text_model() -> str:
+    return os.environ.get("LLM_MODEL_TEXT", "claude-haiku-4-5-20251001")
+
+
+USE_BATCH = os.environ.get("LLM_USE_BATCH", "false").lower() == "true"
 
 PROMPT = """You are an invoice field extractor. Return a JSON object with NO other text,
 NO code fences, NO explanation. Start with { and end with }.
@@ -61,19 +69,20 @@ def _usage(response, model: str) -> dict:
 
 def _call_text_llm(client: anthropic.Anthropic, text: str) -> tuple[dict | None, dict | None]:
     """Returns (parsed_fields_or_None, usage_or_None)."""
+    text_model = _text_model()
     try:
         if USE_BATCH:
-            return _call_batch(client, TEXT_MODEL, system=_CACHED_SYSTEM,
+            return _call_batch(client, text_model, system=_CACHED_SYSTEM,
                                messages=[{"role": "user", "content": text}])
         response = client.messages.create(
-            model=TEXT_MODEL,
+            model=text_model,
             max_tokens=512,
             system=_CACHED_SYSTEM,
             messages=[{"role": "user", "content": text}],
         )
         raw = response.content[0].text if response.content else ""
         print(f"[llm] text_layer raw={raw!r}", flush=True)
-        return _parse_response(raw), _usage(response, TEXT_MODEL)
+        return _parse_response(raw), _usage(response, text_model)
     except anthropic.APIError as e:
         print(f"[llm] text LLM failed: {e}", flush=True)
         return None, None
@@ -89,13 +98,14 @@ def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> tuple[dict | 
     # Prompt appended to user content; system carries the cached instruction block.
     content.append({"type": "text", "text": "Extract the invoice fields as JSON."})
 
-    print(f"[llm] image model={MODEL} pages={len(images)} pdf={pdf_path}", flush=True)
+    model = _model()
+    print(f"[llm] image model={model} pages={len(images)} pdf={pdf_path}", flush=True)
     try:
         if USE_BATCH:
-            return _call_batch(client, MODEL, system=_CACHED_SYSTEM,
+            return _call_batch(client, model, system=_CACHED_SYSTEM,
                                messages=[{"role": "user", "content": content}])
         response = client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=512,
             system=_CACHED_SYSTEM,
             messages=[
@@ -106,7 +116,7 @@ def _call_image_llm(client: anthropic.Anthropic, pdf_path: str) -> tuple[dict | 
         print(f"[llm] stop_reason={response.stop_reason} content_blocks={len(response.content)}", flush=True)
         raw = "{" + (response.content[0].text if response.content else "")
         print(f"[llm] image raw={raw!r}", flush=True)
-        return _parse_response(raw), _usage(response, MODEL)
+        return _parse_response(raw), _usage(response, model)
     except anthropic.APIError as e:
         print(f"[llm] image LLM failed: {e}", flush=True)
         return None, None

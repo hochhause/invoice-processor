@@ -1,0 +1,75 @@
+name: desktop-build
+
+# Build the double-clickable desktop app.
+# PyInstaller cannot cross-compile → one job per target OS.
+# Trigger manually (Actions tab → Run workflow) or by pushing a desktop-v* tag.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r desktop/requirements-desktop.txt
+      - name: Build
+        run: pyinstaller desktop/InvoiceProcessor.spec --noconfirm
+      - name: Smoke test (server boots, status endpoint answers)
+        shell: pwsh
+        run: |
+          $env:INVOICE_NO_BROWSER = "1"
+          $p = Start-Process -FilePath "dist/InvoiceProcessor/InvoiceProcessor.exe" -PassThru
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-RestMethod "http://127.0.0.1:8743/api/settings/status" -TimeoutSec 2
+              if ($null -ne $r.api_key_set) { $ok = $true; break }
+            } catch {}
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw "server did not come up" }
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/InvoiceProcessor -DestinationPath InvoiceProcessor-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InvoiceProcessor-windows
+          path: InvoiceProcessor-windows.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r desktop/requirements-desktop.txt
+      - name: Build
+        run: pyinstaller desktop/InvoiceProcessor.spec --noconfirm
+      - name: Smoke test (server boots, status endpoint answers)
+        run: |
+          INVOICE_NO_BROWSER=1 ./dist/InvoiceProcessor/InvoiceProcessor &
+          PID=$!
+          ok=0
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://127.0.0.1:8743/api/settings/status | grep -q api_key_set; then
+              ok=1; break
+            fi
+          done
+          kill $PID || true
+          [ "$ok" = "1" ] || { echo "server did not come up"; exit 1; }
+      - name: Zip (ditto keeps executable bits)
+        run: ditto -c -k --sequesterRsrc dist/InvoiceProcessor InvoiceProcessor-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InvoiceProcessor-macos
+          path: InvoiceProcessor-macos.zip

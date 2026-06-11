@@ -42,12 +42,14 @@ from fastapi.templating import Jinja2Templates
 import config
 import cost
 import db
+import paths
 import pipeline
+import settings_store
 import vendors as vendors_mod
 import xml_export
 from auth import require_auth
 
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/app/data/uploads"))
+UPLOAD_DIR = paths.upload_dir()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Columns that may be written back to a job row from pipeline output.
@@ -80,8 +82,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, dependencies=[Depends(require_auth)])
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# Absolute paths so the app works when CWD != app/ (PyInstaller bundle, launcher)
+_RES = paths.resource_dir()
+app.mount("/static", StaticFiles(directory=str(_RES / "static")), name="static")
+templates = Jinja2Templates(directory=str(_RES / "templates"))
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -408,6 +412,172 @@ async def update_vendor(vendor_id: str, request: Request):
 async def delete_vendor_route(vendor_id: str):
     vendors_mod.delete_vendor(vendor_id)
     return JSONResponse({"ok": True})
+
+
+# ── Settings (desktop mode) ───────────────────────────────────────────────────
+
+_BANK_RE = re.compile(r"^[A-Z]+$")
+_CCY_RE = re.compile(r"^[A-Z]{3}$")
+_BIC_RE = re.compile(r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$")
+
+
+def _bank_env_keys(banks: list) -> set:
+    """Env keys owned by a bank-config list (parsed shape of /api/settings).
+
+    Includes the bank-level ``{BANK}_BIC`` fallback: the popup saves explicit
+    per-ccy BICs (GET already resolves the fallback into each account), so the
+    bank-level key is always superseded on save and cleaned up here."""
+    keys = set()
+    for b in banks:
+        name = b["name"]
+        keys.add(f"{name}_CURRENCIES")
+        keys.add(f"{name}_DEFAULT_CCY")
+        keys.add(f"{name}_BIC")
+        for acct in b["accounts"]:
+            keys.add(f"{name}_{acct['ccy']}_IBAN")
+            keys.add(f"{name}_{acct['ccy']}_BIC")
+    return keys
+
+
+def _current_settings() -> dict:
+    """Full editable config, read fresh from the environment (no cache)."""
+    cfg = config.load_accounts()
+    banks = []
+    for bank in cfg["banks"]:
+        accounts = [
+            {"ccy": ccy, "iban": acct.get("iban", ""), "bic": acct.get("bic", "")}
+            for ccy, acct in sorted(cfg["accounts"].get(bank, {}).items())
+        ]
+        banks.append({
+            "name": bank,
+            "currencies": sorted(cfg["currencies"].get(bank, set())),
+            "default_ccy": cfg["defaults"].get(bank, ""),
+            "accounts": accounts,
+        })
+    return {
+        "desktop": paths.is_desktop(),
+        "api_key_set": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+        "debtor_name": cfg["debtor_name"],
+        "llm_model": os.environ.get("LLM_MODEL", ""),
+        "banks": banks,
+    }
+
+
+def _parse_settings_payload(data: dict) -> tuple[dict | None, str | None]:
+    """Validate + normalize a POST /api/settings payload. → (parsed, error)."""
+    debtor_name = (data.get("debtor_name") or "").strip()
+    llm_model = (data.get("llm_model") or "").strip()
+    api_key = (data.get("api_key") or "").strip()
+    if api_key and any(c.isspace() for c in api_key):
+        return None, "API key must be a single token"
+
+    banks, seen = [], set()
+    for b in data.get("banks") or []:
+        name = (b.get("name") or "").strip().upper()
+        if not _BANK_RE.match(name):
+            return None, f"Bank name must be letters only: {name or '(empty)'}"
+        if name in seen:
+            return None, f"Duplicate bank: {name}"
+        seen.add(name)
+
+        currencies = [c.strip().upper() for c in (b.get("currencies") or []) if c.strip()]
+        for c in currencies:
+            if not _CCY_RE.match(c):
+                return None, f"{name}: invalid currency code {c!r}"
+        if not currencies:
+            return None, f"{name}: at least one currency required"
+
+        default_ccy = (b.get("default_ccy") or "").strip().upper()
+        if default_ccy and default_ccy not in currencies:
+            return None, f"{name}: default currency {default_ccy} not in its currency list"
+        if not default_ccy:
+            default_ccy = currencies[0]
+
+        accounts, seen_ccy = [], set()
+        for acct in b.get("accounts") or []:
+            ccy = (acct.get("ccy") or "").strip().upper()
+            iban = re.sub(r"\s", "", acct.get("iban") or "").upper()
+            bic = (acct.get("bic") or "").strip().upper()
+            if not _CCY_RE.match(ccy):
+                return None, f"{name}: account has invalid currency {ccy!r}"
+            if ccy in seen_ccy:
+                return None, f"{name}: duplicate {ccy} account"
+            seen_ccy.add(ccy)
+            if iban and not config._validate_iban(iban):
+                return None, f"{name} {ccy}: IBAN fails checksum — please re-check"
+            if bic and not _BIC_RE.match(bic):
+                return None, f"{name} {ccy}: BIC format invalid (8 or 11 chars)"
+            accounts.append({"ccy": ccy, "iban": iban, "bic": bic})
+
+        banks.append({"name": name, "currencies": currencies,
+                      "default_ccy": default_ccy, "accounts": accounts})
+
+    return {"debtor_name": debtor_name, "llm_model": llm_model,
+            "api_key": api_key, "banks": banks}, None
+
+
+@app.get("/api/settings/status")
+async def settings_status():
+    """First-run probe for the desktop app: is the Anthropic key configured?
+
+    ``desktop`` tells the frontend whether settings can be saved via the API
+    (container deployments keep configuring everything through env/.env)."""
+    return JSONResponse({
+        "desktop": paths.is_desktop(),
+        "api_key_set": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+    })
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Everything the settings popup edits: payee, model, banks/accounts."""
+    return JSONResponse(_current_settings())
+
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    """Persist the full config to <app-data>/settings.env (desktop only).
+
+    Replaces all bank-derived env keys: keys for banks/accounts that no longer
+    exist in the payload are removed from file + environment. Applies live —
+    config cache is cleared, llm reads env per call."""
+    if not paths.is_desktop():
+        return JSONResponse(
+            {"error": "settings are managed via environment in server mode"},
+            status_code=403,
+        )
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    parsed, err = _parse_settings_payload(data)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+
+    values = {"DEBTOR_NAME": parsed["debtor_name"]}
+    if parsed["llm_model"]:
+        values["LLM_MODEL"] = parsed["llm_model"]
+        values["LLM_MODEL_TEXT"] = parsed["llm_model"]
+    if parsed["api_key"]:
+        values["ANTHROPIC_API_KEY"] = parsed["api_key"]
+    for b in parsed["banks"]:
+        values[f"{b['name']}_CURRENCIES"] = ",".join(b["currencies"])
+        values[f"{b['name']}_DEFAULT_CCY"] = b["default_ccy"]
+        for acct in b["accounts"]:
+            values[f"{b['name']}_{acct['ccy']}_IBAN"] = acct["iban"]
+            values[f"{b['name']}_{acct['ccy']}_BIC"] = acct["bic"]
+
+    # Bank keys that existed before but are gone now → delete from file + env
+    old_cfg = config.load_accounts()
+    old_banks = [{"name": bank,
+                  "accounts": [{"ccy": c} for c in old_cfg["accounts"].get(bank, {})]}
+                 for bank in old_cfg["banks"]]
+    stale = _bank_env_keys(old_banks) - set(values)
+
+    settings_store.set_many(values, remove=sorted(stale))
+    config._clear_cache()
+    return JSONResponse({"ok": True, "settings": _current_settings()})
 
 
 # ── Export / Download ─────────────────────────────────────────────────────────

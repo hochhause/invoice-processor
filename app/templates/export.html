@@ -17,7 +17,9 @@
     .main {
       flex: 1;
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      /* column count set by export.js: one per configured bank + Unsorted */
+      grid-auto-columns: 1fr;
+      grid-auto-flow: column;
       gap: 0;
       overflow: hidden;
     }
@@ -53,10 +55,6 @@
       font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
       color: var(--text-dim); margin-right: 6px;
     }
-
-    .col-bkb .bank-header { border-top: 3px solid #22BAA0; }
-    .col-raiff .bank-header { border-top: 3px solid #22BAA0; }
-    .col-unsorted .bank-header { border-top: 3px solid var(--amber); }
 
     .drop-zone {
       flex: 1;
@@ -236,51 +234,12 @@
   <button class="btn btn-ghost" onclick="window.location='/'">← Back to Dashboard</button>
 </div>
 
-<!-- THREE-COLUMN DRAG BOARD -->
-<div class="main">
-
-  <!-- BKB -->
-  <div class="bank-col col-bkb">
-    <div class="bank-header">
-      <div class="bank-name">BKB</div>
-      <div class="bank-meta">CHF · SEK · EUR</div>
-      <div class="bank-total" id="bkb-total">—</div>
-    </div>
-    <div class="drop-zone" id="zone-bkb" ondragover="onDragOver(event)" ondrop="onDrop(event,'BKB')" ondragleave="onDragLeave(event)">
-    </div>
-  </div>
-
-  <!-- RAIFFEISEN -->
-  <div class="bank-col col-raiff">
-    <div class="bank-header">
-      <div class="bank-name">Raiffeisen</div>
-      <div class="bank-meta">USD · CAD · GBP</div>
-      <div class="bank-total" id="raiff-total">—</div>
-    </div>
-    <div class="drop-zone" id="zone-raiff" ondragover="onDragOver(event)" ondrop="onDrop(event,'RAIFFEISEN')" ondragleave="onDragLeave(event)">
-    </div>
-  </div>
-
-  <!-- MANUAL/UNSORTED -->
-  <div class="bank-col col-unsorted">
-    <div class="bank-header">
-      <div class="bank-name">Unsorted</div>
-      <div class="bank-meta">Needs manual assignment</div>
-      <div class="bank-total" id="unsorted-count">—</div>
-    </div>
-    <div class="drop-zone" id="zone-unsorted" ondragover="onDragOver(event)" ondrop="onDrop(event,'MANUAL')" ondragleave="onDragLeave(event)">
-    </div>
-  </div>
-
-</div>
+<!-- DRAG BOARD — one column per configured bank + Unsorted (built by export.js) -->
+<div class="main" id="board"></div>
 
 <!-- BOTTOM BAR -->
 <div class="bottombar">
-  <div class="stats">
-    BKB: <span id="stat-bkb">0</span> &nbsp;·&nbsp;
-    Raiffeisen: <span id="stat-raiff">0</span> &nbsp;·&nbsp;
-    Unsorted: <span id="stat-unsorted">0</span>
-  </div>
+  <div class="stats" id="bank-stats"></div>
   <div class="spacer"></div>
   <div class="warn-badge" id="unsorted-warn" style="display:none;"></div>
   <button class="btn btn-success" id="download-btn" onclick="acceptAndDownload()">✓ Accept &amp; Download</button>
@@ -303,6 +262,7 @@
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
+<script src="/static/js/banks.js"></script>
 <script src="/static/js/modal.js"></script>
 <script src="/static/js/export.js"></script>
 

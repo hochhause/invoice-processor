@@ -33,16 +33,18 @@ import re
 
 
 def _decode_spc(img, zbar_decode) -> str | None:
-    """Try pyzbar then zxingcpp on img; return SPC payload string or None."""
+    """Try pyzbar (when available) then zxingcpp on img; return SPC payload or None."""
     import numpy as np
     gray = img.convert("L")
 
-    # pyzbar
-    for sym in zbar_decode(gray):
-        data = sym.data.decode("utf-8", errors="replace")
-        data = data.replace("\r\n", "\n").replace("\r", "\n")
-        if data.startswith("SPC\n"):
-            return data
+    # pyzbar — optional: needs the system zbar shared library, which the
+    # PyInstaller desktop build does not ship; zxingcpp covers it there.
+    if zbar_decode is not None:
+        for sym in zbar_decode(gray):
+            data = sym.data.decode("utf-8", errors="replace")
+            data = data.replace("\r\n", "\n").replace("\r", "\n")
+            if data.startswith("SPC\n"):
+                return data
 
     # zxingcpp fallback
     try:
@@ -70,11 +72,16 @@ def _scan_pdf_qr(pdf_path: str) -> str | None:
     """
     try:
         import fitz
-        from pyzbar.pyzbar import decode as zbar_decode
         from PIL import Image
         import io
     except ImportError:
         return None
+
+    # pyzbar is optional (missing zbar DLL / desktop build) — zxingcpp remains.
+    try:
+        from pyzbar.pyzbar import decode as zbar_decode
+    except Exception:
+        zbar_decode = None
 
     import sys
     from pathlib import Path

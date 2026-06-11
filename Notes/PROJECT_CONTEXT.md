@@ -45,10 +45,12 @@ invoice-processor/
 │   ├── pipeline.py          — Two-function pipeline: run_qr() + run_llm()
 │   ├── llm.py               — Claude client: extract_text_stage/extract_image_stage → (fields, usage); PROMPT extracts 13 keys incl. cdtr_* address fields (T6) [[DECISIONS#LLM Returns Structured JSON (not raw OCR text)]]
 │   ├── cost.py              — Per-model token pricing + estimate_cost()
-│   ├── xml_export.py        — ISO 20022 pain.001.001.09 generator: build_pain001(jobs, accounts, bank); per-ccy PmtInf debits config.resolve_account(bank, ccy) (DbtrAcct/Ccy=account ccy, InstdAmt/Ccy=payment ccy/FX); ChrgBr at PmtInf level (SEPA→SLEV, SWIFT→SHAR); structured Cdtr/PstlAdr (_cdtr_address); validates vs SIX CH XSD; T9 blockers gate upstream [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#pain.001.001.09 Migration]]
-│   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder
-│   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage)
-│   ├── tests.py             — Startup self-tests (DEV_MODE)
+│   ├── xml_export.py        — ISO 20022 pain.001.001.09 generator: build_pain001(jobs, accounts, bank); per-ccy PmtInf debits config.resolve_account(bank, ccy) (DbtrAcct/Ccy=account ccy, InstdAmt/Ccy=payment ccy/FX); service level **currency-driven** (CHF→NURG, EUR→SEPA, else NURG+SWIFT — works for settings-added banks) [[DECISIONS#In-App Settings + Config-Driven Bank UI (branch: desktop)]]; ChrgBr at PmtInf level (SEPA→SLEV, SWIFT→SHAR); structured Cdtr/PstlAdr (_cdtr_address); validates vs SIX CH XSD; T9 blockers gate upstream [[DECISIONS#Per-Account Debtor Model]] [[DECISIONS#pain.001.001.09 Migration]]
+│   ├── qr_swiss.py          — Swiss QR-bill (SPC) decoder (pyzbar optional; zxing-cpp always)
+│   ├── paths.py             — Path resolution: container `/app/data` vs desktop app-data; resource_dir() for bundled assets [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]]
+│   ├── settings_store.py    — Desktop settings.env (load into environ before app imports; set_value persists + applies)
+│   ├── db.py                — SQLite schema + queries (pain.001 fields + token usage); DB_PATH via paths.db_path()
+│   ├── tests.py             — Startup self-tests (DEV_MODE; excluded from desktop bundle)
 │   ├── templates/
 │   │   ├── index.html       — Main dashboard (table + edit modal)
 │   │   └── export.html      — Export screen (drag board + download)
@@ -62,11 +64,18 @@ invoice-processor/
 │   ├── PROJECT_CONTEXT.md   — This file
 │   ├── DECISIONS.md         — [[DECISIONS]]
 │   ├── Features.md          — [[Features]]
-│   └── export_screen_poc.html — POC for export screen UI
+│   └── Plan.md              — [[Plan]]
+├── desktop/                 — Desktop packaging (branch: desktop) [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]]
+│   ├── launcher.py          — Entry point: load settings.env → uvicorn on 127.0.0.1:8743 → open browser
+│   ├── InvoiceProcessor.spec — PyInstaller onedir spec (datas: templates/static/schemas; excludes pyzbar/tests)
+│   ├── settings.env.template — Seeded to app-data on first run (bank config, models)
+│   ├── requirements-desktop.txt — requirements.txt minus pyzbar/xmlschema + pyinstaller
+│   └── README.md            — Build + recipient instructions
+├── .github/workflows/desktop-build.yml — Windows+macOS PyInstaller builds (manual / desktop-v* tag)
 ├── README.md
 ├── start.sh
 ├── Dockerfile
-├── docker-compose.yml
+├── compose.yaml
 ├── .env.example
 └── .gitignore
 ```
@@ -92,6 +101,15 @@ invoice-processor/
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
+
+**Desktop (PyInstaller / from source)**
+```bash
+python desktop/launcher.py        # source; INVOICE_NO_BROWSER=1, INVOICE_PORT=n for testing
+pyinstaller desktop/InvoiceProcessor.spec --noconfirm   # build → dist/InvoiceProcessor/
+```
+Desktop mode (`sys.frozen` or `INVOICE_DESKTOP=1`) moves all writable data to
+`%APPDATA%\InvoiceProcessor` (Win) / `~/Library/Application Support/InvoiceProcessor` (mac);
+config is loaded from `<app-data>/settings.env` before app imports. See [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]].
 
 **Startup Self-Tests (T11)**
 ```bash
@@ -223,6 +241,9 @@ CREATE TABLE jobs (
 | DELETE | `/api/jobs/{id}` | Delete single job |
 | DELETE | `/api/clear-all` | Wipe all non-archived jobs |
 | GET | `/api/analytics` | Match-type counts **+ `cost` block** (per-model token totals + USD) |
+| GET | `/api/settings/status` | `{desktop, api_key_set}` — first-run probe (opens settings popup when unset) |
+| GET | `/api/settings` | Full editable config: `{desktop, api_key_set, debtor_name, llm_model, banks:[{name, currencies, default_ccy, accounts:[{ccy,iban,bic}]}]}` |
+| POST | `/api/settings` | Persist full config to `<app-data>/settings.env` (validates bank/ccy/IBAN-MOD97/BIC; removes stale bank keys; clears config cache → applies live); 403 outside desktop mode |
 | GET/POST/PUT/DELETE | `/api/vendors[/{id}]` | Vendor IBAN/BIC CRUD |
 
 > **Auth:** when `APP_PASSWORD` is set, every route above requires HTTP Basic
@@ -251,24 +272,24 @@ APP_USERNAME=admin     # optional, defaults to "admin"
 ```env
 DEBTOR_NAME=Lyfegen HealthTech AG
 
-# BKB: CHF domestic + SEPA (SEK/EUR fall back to CHF account)
+# BKB: CHF domestic + SEPA (SEK has no own acct → falls back to CHF default)
 BKB_CURRENCIES=CHF,EUR,SEK
 BKB_DEFAULT_CCY=CHF
-BKB_CHF_IBAN=<CH IBAN>
-BKB_CHF_BIC=BLKBCH22
+BKB_CHF_IBAN=<CH IBAN>        # spaces allowed — config.load_accounts normalizes
 BKB_EUR_IBAN=<CH IBAN>
-BKB_EUR_BIC=BLKBCH22
+BKB_BIC=BLKBCH22              # bank-level fallback; {BANK}_{CCY}_BIC overrides per account
 
-# Raiffeisen: cross-border (CAD/GBP fall back to USD account)
+# Raiffeisen: cross-border (SWIFT)
 RAIFFEISEN_CURRENCIES=USD,CAD,GBP
 RAIFFEISEN_DEFAULT_CCY=USD
 RAIFFEISEN_USD_IBAN=<CH IBAN>
-RAIFFEISEN_USD_BIC=RAIFCH22XXX
 RAIFFEISEN_CAD_IBAN=<CH IBAN>
-RAIFFEISEN_CAD_BIC=RAIFCH22XXX
 RAIFFEISEN_GBP_IBAN=<CH IBAN>
-RAIFFEISEN_GBP_BIC=RAIFCH22XXX
+RAIFFEISEN_BIC=RAIFCH22
 ```
+> IBANs are normalized (whitespace stripped, uppercased) at load. `{BANK}_BIC`
+> fills any account missing a per-ccy BIC. The settings popup saves explicit
+> per-ccy keys and removes the bank-level fallback key it supersedes.
 > `DEBTOR_IBAN` / `DEBTOR_BIC` are superseded by the per-bank keys above — **T12 cleaned** them out of `.env.example` (only `DEBTOR_NAME` + the per-bank/ccy keys remain). This section is the source of truth the `.env.example` body mirrors.
 
 **Paths**
@@ -280,8 +301,18 @@ DEBUG_QR_DIR=/app/data/debug_qr   # optional: save QR scan debug images
 
 **Feature flags**
 ```env
-DEV_MODE=true|false
+DEV_MODE=true|false      # desktop build excludes tests.py — leave false there
 ```
+
+**Desktop mode (branch: desktop)**
+```env
+INVOICE_DESKTOP=1        # force desktop paths when running from source (frozen builds auto-detect)
+INVOICE_PORT=8743        # fixed port (default 8743)
+INVOICE_NO_BROWSER=1     # suppress auto-open (CI smoke tests)
+```
+> Desktop config lives in `<app-data>/settings.env` (same KEY=VALUE vocabulary as `.env`);
+> real env vars always win. `DB_PATH`/`UPLOAD_DIR` defaults switch to app-data in desktop
+> mode, stay `/app/data/*` in the container.
 
 ---
 
@@ -306,3 +337,16 @@ See [[DECISIONS]] for full rationale. Summary:
 7. Unsorted invoices excluded from export (not blocking — operator confirms)
 8. HTTP Basic auth (single shared `APP_PASSWORD`), disabled when env unset — see [[DECISIONS]]
 9. Cost tracker from real API token usage; model-aware pricing → Sonnet switch is config-only
+10. Testing phase: dev tunnel (`lyfegen-invoice-test`, Entra-tenant-gated) instead of deploy — see [[DECISIONS#Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)]]
+
+---
+
+## Testing-Phase Access (branch: desktop)
+
+- `scripts/start-test-tunnel.ps1` — starts `dist\InvoiceProcessor\InvoiceProcessor.exe`
+  (INVOICE_NO_BROWSER=1) + hosts dev tunnel `lyfegen-invoice-test` (port 8743);
+  prereq one-time commands in the script header (`devtunnel create/port/access --tenant`).
+- `docs/confluence/invoice-processor-user-guide.html` — tester-facing Confluence page
+  (storage format); `docs/confluence/README.md` — how to publish + URL check.
+- Tunnel URL: `https://x3m2th39-8743.euw.devtunnels.ms` (stable; stored on the persistent
+  tunnel `lyfegen-invoice-test.euw` — changes only if the tunnel is deleted + recreated).

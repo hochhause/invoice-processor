@@ -330,6 +330,74 @@ All checks pass when env config is set (see [[Plan#T11 — Tests incl. XSD valid
 
 ---
 
+## Desktop Packaging — PyInstaller onedir + app-data (branch: desktop, 2026-06-10)
+
+**Decision:** Ship the app to non-technical users as a PyInstaller `--onedir` bundle (zipped folder, double-click `InvoiceProcessor.exe`) rather than Docker Desktop or an install script.
+
+**Why:**
+- Target user installs nothing: unzip → double-click → browser opens. Docker Desktop is the hassle we're avoiding (install, keep running, commercial licensing); a uv/script install leaves moving parts and needs a terminal.
+- `--onedir` over `--onefile`: starts much faster (no self-extraction per launch); zip the folder.
+
+**Key choices (all in `desktop/` + `app/paths.py` / `app/settings_store.py`):**
+1. **Mode detection, not forked code** — `paths.is_desktop()` (PyInstaller `sys.frozen` or `INVOICE_DESKTOP=1`). Container behaviour is byte-identical: `/app/data` defaults preserved, env vars `DB_PATH`/`UPLOAD_DIR` always win.
+2. **Writable data in per-user app-data** (`%APPDATA%\InvoiceProcessor`, `~/Library/Application Support/InvoiceProcessor`) — a bundle may run from a read-only location, and replacing the app folder on update must never delete `invoices.db`.
+3. **API key via first-run web UI**, persisted to `<app-data>/settings.env` — never baked into the binary, no terminal needed. `POST /api/settings/api-key` is 403 outside desktop mode (server stays env-managed). llm.py reads the key per call → applies without restart.
+4. **settings.env over JSON** — same KEY=VALUE vocabulary as the server `.env`; `settings_store.load_into_environ()` runs before app imports, so all existing env-driven config (bank accounts, models) works unchanged. Real env vars take precedence (`setdefault`).
+5. **pyzbar optional, zxing-cpp primary in the bundle** — pyzbar needs the system zbar shared library which PyInstaller won't collect; `qr_swiss.py` degrades gracefully (`zbar_decode=None`), zxing-cpp ships its binary in the wheel. Docker keeps both (libzbar0 in image).
+6. **Console window = quit affordance** (`console=True`) — visible logs, "close the black window to stop" is explainable to anyone; no tray-icon dependency (pystray) for v1.
+7. **Builds on GitHub Actions** (`desktop-build.yml`, manual or `desktop-v*` tag) — PyInstaller cannot cross-compile; windows-latest + macos-latest jobs, each smoke-tests the built binary (boots server, probes `/api/settings/status`) before uploading the zip.
+
+**Accepted trade-offs:**
+- R unsigned binaries → SmartScreen "More info → Run anyway" / Gatekeeper right-click-Open, once per machine. Documented in `desktop/README.md`.
+- R updates are manual (rebuild + send zip). If frequent → add a version-check banner endpoint later.
+- R `settings.env` stores the API key in plain text in app-data — same trust level as a server `.env`; deliberate, no fake obfuscation.
+- N `DEV_MODE=true` in a desktop build crashes at startup: `tests` module is excluded from the bundle. Template ships it commented out.
+
+**Location:** `desktop/{launcher.py, InvoiceProcessor.spec, settings.env.template, requirements-desktop.txt, README.md}`, `app/{paths.py, settings_store.py}`, settings routes in `app/main.py`, `app/static/js/settings.js`, `.github/workflows/desktop-build.yml`. See [[Features#12. Desktop App Packaging (branch: desktop)]].
+
+---
+
+## In-App Settings + Config-Driven Bank UI (branch: desktop)
+
+**Decision:** All operator-facing config (API key, debtor name, LLM model, banks/currencies/accounts) is editable in a Settings popup that writes `<app-data>/settings.env` — and the frontend renders banks **from config**, never from hardcoded names.
+
+**Why:** the desktop user has no terminal and no `.env`; adding a new bank account must not require a rebuild. Half-measures (editable config but hardcoded BKB/RAIFFEISEN columns) would leave a new bank invisible on the export board — so the bank UI went fully dynamic in the same change.
+
+**Key choices:**
+1. **Same env vocabulary, new write path** — `POST /api/settings` maps the popup straight onto the existing `{BANK}_CURRENCIES` / `{BANK}_{CCY}_IBAN/BIC` keys via `settings_store.set_many(values, remove=stale)`; deleted banks/accounts have their keys removed from file **and** `os.environ`. `config._clear_cache()` makes routing/export pick it up live. Server mode: 403, popup read-only (env stays the source of truth there).
+2. **Validation at the API boundary** — bank `^[A-Z]+$`, ccy `^[A-Z]{3}$`, IBAN MOD-97 (reject, not warn — operator is non-technical), BIC 8/11 shape, default ccy ∈ currencies. Frontend stays dumb.
+3. **`banks.js` single source for the frontend** — bank list + deterministic palette from `/api/accounts-summary`; export columns, modal pills, dashboard chips all render from it. Job with a `bank_target` that no longer exists falls back to the Unsorted column (visible + re-assignable) instead of vanishing.
+4. **`_get_service_level` became currency-driven** (CHF→NURG domestic, EUR→SEPA, else NURG+SWIFT). The old per-bank branches encoded exactly these rules for each bank's currency list; bank-name branches would have silently given settings-added banks no SWIFT instrument and no cross-border export gating (rule-3 blocker keys off `add_swift`). Full startup suite + SIX CH XSD validation pass unchanged.
+5. **Model applies live** — `llm.py` resolves `LLM_MODEL`/`LLM_MODEL_TEXT` per call (was import-time), matching the per-call API-key read; popup writes both keys from one field.
+6. `POST /api/settings/api-key` removed — superseded by the full `POST /api/settings` (first-run now opens the same popup).
+
+**Accepted trade-offs:**
+- R currency collision across banks still resolves first-bank-wins (existing `config.load_accounts` rule) — popup does not block it; warning stays log-only.
+- R `_effectiveBank` fallback means removing a bank silently re-sorts its pending invoices to Unsorted — deliberate (visible beats orphaned).
+- N settings POST is desktop-only; container deployments keep `.env` as the single config source.
+
+**Location:** `app/main.py` (settings section), `app/settings_store.py:set_many`, `app/static/js/{banks,settings,export,modal,dashboard}.js`, `app/templates/{index,export}.html`, `app/templates/partials/modal_edit.html`, `app/xml_export.py:_get_service_level`. See [[Features#13. In-App Settings Popup (branch: desktop)]].
+
+---
+
+## Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)
+
+**Decision:** Before the .exe rollout, testers reach the app through a **persistent Microsoft Dev Tunnel** (`lyfegen-invoice-test`, port 8743) hosted from the operator's machine, **access-gated to the Lyfegen Entra/M365 tenant** (`devtunnel access create … --tenant`). `APP_PASSWORD` stays **off** during this phase. Tool was mandated; access model + no-shared-password were chosen deliberately.
+
+**Why:**
+- Tenant gating > shared password for finance data: individual corporate sign-in, centrally revocable, no secret to leak; the Microsoft relay terminates TLS 1.2+ end to end.
+- Persistent named tunnel → stable URL testers bookmark once (`https://lyfegen-invoice-test-8743.<cluster>.devtunnels.ms`); temporary tunnels regenerate URLs per run.
+- App runs as the **built exe** (`dist\InvoiceProcessor\InvoiceProcessor.exe`) so the test exercises the real deployment artifact.
+
+**Accepted trade-offs:**
+- R availability = operator machine awake + `devtunnel host` running; testers see "page unreachable" otherwise (documented as expected).
+- R desktop mode ⇒ settings popup is editable by **every** tester (shared `settings.env`); doc instructs not to touch. Single shared workspace (all testers see all invoices).
+- N tunnel idles out after 30 days inactivity; tenant access grant expires ≤30 days → re-run `devtunnel access create … --tenant` on "access denied".
+
+**Location:** `scripts/start-test-tunnel.ps1` (one-command app+tunnel bringup, prereq commands in header), `docs/confluence/invoice-processor-user-guide.html` (tester-facing guide, Confluence storage format incl. security section), `docs/confluence/README.md` (publish instructions). See [[Features#14. Testing-Phase Remote Access + User Guide (branch: desktop)]].
+
+---
+
 ## Notable TODOs / Gaps
 
 **[MISSING]** Rate limiting on `/api/run-llm-batch` — could accidentally trigger multiple concurrent LLM batches if clicked twice. Add a lock flag in DB (`llm_batch_running`).

@@ -4,8 +4,10 @@ config.py — Per-bank, per-currency account configuration from environment.
 Reads:  DEBTOR_NAME
         {BANK}_CURRENCIES   comma-separated list of currencies the bank handles
         {BANK}_DEFAULT_CCY  fallback account currency (e.g. CHF for BKB)
-        {BANK}_{CCY}_IBAN   IBAN for that account
+        {BANK}_{CCY}_IBAN   IBAN for that account (spaces allowed — normalized)
         {BANK}_{CCY}_BIC    BIC  for that account
+        {BANK}_BIC          bank-level BIC fallback for accounts without their
+                            own {CCY}_BIC (same institution, one BIC)
 
 Exposes: load_accounts() → raw dict (no cache)
          get_accounts()  → cached parse (call freely; reset via _clear_cache())
@@ -79,6 +81,16 @@ def load_accounts():
         if ccy not in accounts[bank]:
             accounts[bank][ccy] = {"iban": "", "bic": ""}
         accounts[bank][ccy][field] = val or ""
+
+    # 3b. normalize IBANs (spaces allowed in .env/settings for readability) and
+    # apply the bank-level {BANK}_BIC fallback to accounts without their own BIC
+    for bank in banks:
+        bank_bic = (os.getenv(f"{bank}_BIC", "") or "").strip().upper()
+        for acct in accounts[bank].values():
+            if acct["iban"]:
+                acct["iban"] = _norm_iban(acct["iban"])
+            if not acct["bic"] and bank_bic:
+                acct["bic"] = bank_bic
 
     # 4. ccy → bank index (first-bank-wins on collision)
     ccy_bank_index = {}

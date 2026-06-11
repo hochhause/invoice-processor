@@ -226,6 +226,79 @@ Rationale: [[DECISIONS#Cost Tracking from Real Token Usage (model-aware)]].
 
 ---
 
+## 12. Desktop App Packaging (branch: desktop)
+
+**Implemented in:** `desktop/launcher.py`, `desktop/InvoiceProcessor.spec`, `app/paths.py`, `app/settings_store.py`, `app/main.py` (settings routes), `app/static/js/settings.js`, `.github/workflows/desktop-build.yml`
+
+**Behavior:**
+- PyInstaller `--onedir` build: recipient unzips, double-clicks `InvoiceProcessor.exe`
+  → server starts on `127.0.0.1:8743`, browser opens automatically. Close window = quit.
+- Writable data (`invoices.db`, `uploads/`, `settings.env`) lives in per-user app-data
+  (`%APPDATA%\InvoiceProcessor` / `~/Library/Application Support/InvoiceProcessor`);
+  container mode keeps `/app/data` unchanged.
+- First run opens the full Settings popup (see [[Features#13. In-App Settings Popup]]) —
+  the API key is pasted there, persisted to `settings.env`, applied without restart.
+  Key is never baked into the binary.
+- Bank account config ships via `desktop/settings.env.template` (seeded to app-data on
+  first run) and is fully editable in the Settings popup afterwards.
+- pyzbar optional in `qr_swiss.py` — desktop build relies on zxing-cpp only.
+- CI: `desktop-build` workflow (manual or `desktop-v*` tag) builds + smoke-tests
+  Windows and macOS artifacts. PyInstaller can't cross-compile.
+
+Rationale: [[DECISIONS#Desktop Packaging — PyInstaller onedir + app-data]].
+Docs: `desktop/README.md` (build + recipient instructions).
+
+---
+
+## 13. In-App Settings Popup (branch: desktop)
+
+**Implemented in:** `app/main.py` (`GET/POST /api/settings`), `app/settings_store.py` (`set_many`), `app/static/js/settings.js`, `app/static/js/banks.js`, `app/templates/index.html`
+
+**Behavior:**
+- ⚙ Settings button on the dashboard opens a popup editing everything that used to
+  require `.env`: Anthropic API key, payee/debtor name, AI model, and the full bank
+  list — per bank: name, handled currencies, default currency, and per-currency
+  accounts (IBAN + BIC). Banks/accounts can be added and removed.
+- Saving validates (bank `^[A-Z]+$`, ccy `^[A-Z]{3}$`, IBAN MOD-97, BIC shape,
+  default ccy ∈ currencies), persists to `<app-data>/settings.env` (stale bank keys
+  deleted from file + environment), clears the config cache → **applies live**:
+  routing, export gating, accounts-summary, pain.001 generation, LLM model
+  (`llm.py` reads model + key per call).
+- Server mode: popup is read-only with a "configured via environment" note;
+  `POST /api/settings` returns 403.
+- First run (desktop, no API key) opens the popup automatically.
+
+**Config-driven bank UI (no hardcoded BKB/RAIFFEISEN anywhere in the frontend):**
+- `banks.js` — shared bank list + deterministic color palette from `/api/accounts-summary`.
+- Export board builds one column per configured bank + Unsorted; jobs whose
+  `bank_target` no longer exists fall back to Unsorted (visible, re-assignable).
+- Edit-modal bank pills and dashboard bank chips render from the same list.
+- `xml_export._get_service_level` is currency-driven (CHF→NURG, EUR→SEPA, else
+  NURG+SWIFT) so new banks export with correct semantics.
+
+Rationale: [[DECISIONS#In-App Settings + Config-Driven Bank UI (branch: desktop)]].
+
+---
+
+## 14. Testing-Phase Remote Access + User Guide (branch: desktop)
+
+**Implemented in:** `scripts/start-test-tunnel.ps1`, `docs/confluence/invoice-processor-user-guide.html`, `docs/confluence/README.md`
+
+**Behavior:**
+- One command (`.\scripts\start-test-tunnel.ps1`) starts the built exe on 127.0.0.1:8743
+  (no local browser tab) and hosts the persistent dev tunnel `lyfegen-invoice-test`;
+  Ctrl-C stops tunnel + app.
+- Testers open the stable `*.devtunnels.ms` URL and sign in with their Lyfegen
+  Microsoft account (tenant-gated; first visit shows Microsoft's "Continue" interstitial).
+- Confluence user guide (storage-format HTML) covers: workflow, all 6 statuses, every
+  needs_review trigger + fix, troubleshooting table, full settings reference, security
+  measures (tenant gating, TLS, local data, Anthropic API terms, Azure outlook),
+  test-phase limitations.
+
+Rationale: [[DECISIONS#Testing-Phase Access — Microsoft Dev Tunnels (branch: desktop, 2026-06-11)]].
+
+---
+
 ## Features NOT Implemented (Out of Scope)
 
 - Rate limiting on `/api/run-llm-batch`

@@ -34,24 +34,20 @@ def _get_service_level(ccy: str, bank: str) -> tuple[str, bool]:
     """
     Determine service level code and whether to add SWIFT local instrument.
     Returns: (service_level_code, should_add_swift)
+
+    Currency-driven (not bank-driven) so banks added via the settings popup
+    get correct payment semantics without code changes:
+    CHF → domestic NURG; EUR → SEPA; anything else → NURG + SWIFT.
+    The old per-bank branches encoded exactly these rules for each bank's
+    currency list (BKB: CHF/SEK/EUR, RAIFFEISEN: USD/CAD/GBP).
     """
-    if bank == "BKB":
-        if ccy == "CHF":
-            return ("NURG", False)
-        elif ccy == "SEK":
-            return ("NURG", True)
-        elif ccy == "EUR":
-            return ("SEPA", False)
-        else:
-            return ("NURG", False)
-    elif bank == "RAIFFEISEN":
-        if ccy in ("USD", "CAD", "GBP"):
-            return ("NURG", True)
-        else:
-            return ("NURG", False)
-    else:
-        # MANUAL or unknown bank
+    if ccy == "CHF":
         return ("NURG", False)
+    if ccy == "EUR":
+        return ("SEPA", False)
+    if not bank or bank == "MANUAL":
+        return ("NURG", False)
+    return ("NURG", True)
 
 
 _ISO2_RE = re.compile(r'^[A-Z]{2}$')
@@ -179,7 +175,7 @@ def build_pain001(jobs: list[dict], accounts: dict, bank: str = None) -> str:
         _sub(dbtr, "Nm", debtor_name)
         dbtr_acct = _sub(pmt, "DbtrAcct")
         dbtr_id = _sub(dbtr_acct, "Id")
-        _sub(dbtr_id, "IBAN", acct["iban"])
+        _sub(dbtr_id, "IBAN", acct["iban"].replace(" ", ""))
         _sub(dbtr_acct, "Ccy", acct["ccy"])
 
         dbtr_agt = _sub(pmt, "DbtrAgt")
@@ -250,7 +246,7 @@ def _add_tx(pmt: ET.Element, job: dict, ccy: str):
     # Creditor account
     cdtr_acct = _sub(tx, "CdtrAcct")
     cdtr_id = _sub(cdtr_acct, "Id")
-    _sub(cdtr_id, "IBAN", job.get("iban", ""))
+    _sub(cdtr_id, "IBAN", job.get("iban", "").replace(" ", ""))
 
     # Remittance info
     ref = (job.get("reference") or job.get("invoice_id") or "")[:140]

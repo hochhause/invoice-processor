@@ -26,6 +26,7 @@
   </button>
   <button class="btn btn-ghost" onclick="showAnalytics()">Analytics</button>
   <button class="btn btn-ghost" onclick="showVendors()">Vendors</button>
+  <button class="btn btn-ghost" onclick="openSettings()">⚙ Settings</button>
   <button class="btn btn-ghost" onclick="window.location='/export'">Export →</button>
   <button class="btn btn-ghost" style="color:var(--red);border-color:rgba(239,68,68,.3)" onclick="clearAll()" title="Delete all">Clear all</button>
 </div>
@@ -112,6 +113,48 @@
   </div>
 </div>
 
+<!-- Settings popup: API key, payee, model, banks/accounts (editable on desktop) -->
+<div id="settings-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1100;align-items:center;justify-content:center" onclick="if(event.target===this)closeSettings()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:24px;width:min(640px,96vw);max-height:86vh;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0;font-size:16px;font-weight:600">Settings</h2>
+      <button onclick="closeSettings()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-dim);line-height:1">×</button>
+    </div>
+    <div id="settings-server-note" style="display:none;font-size:12px;color:var(--text-dim);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:10px">
+      Read-only: this deployment is configured via environment variables (.env).
+    </div>
+    <div style="overflow-y:auto;flex:1;padding-right:4px">
+      <div style="display:flex;gap:10px">
+        <div style="flex:1.4">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">Payee / debtor name (appears in pain.001)</div>
+          <input id="s-debtor" type="text" placeholder="Lyfegen HealthTech AG" style="width:100%;box-sizing:border-box">
+        </div>
+        <div style="flex:1">
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">AI model</div>
+          <input id="s-model" type="text" placeholder="claude-haiku-4-5-20251001" style="width:100%;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">Anthropic API key (stored only on this computer)</div>
+        <input id="s-apikey" type="password" autocomplete="off" style="width:100%;box-sizing:border-box">
+      </div>
+      <div style="margin-top:16px;display:flex;align-items:center;gap:8px">
+        <div style="font-size:13px;font-weight:600">Banks &amp; accounts</div>
+        <div style="flex:1"></div>
+        <button id="settings-add-bank" class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="_addBank()">+ Bank</button>
+      </div>
+      <div id="settings-banks"></div>
+    </div>
+    <div id="settings-error" style="display:none;color:var(--red);font-size:12px;margin-top:10px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button id="settings-save" class="btn btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/banks.js"></script>
+<script src="/static/js/settings.js"></script>
 <script src="/static/js/modal.js"></script>
 <script src="/static/js/dashboard.js"></script>
 <script src="/static/js/vendors.js"></script>

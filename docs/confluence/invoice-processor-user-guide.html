@@ -1,0 +1,313 @@
+<h1>Invoice Processor — User Guide (Testing Phase)</h1>
+
+<ac:structured-macro ac:name="toc" ac:schema-version="1">
+  <ac:parameter ac:name="maxLevel">2</ac:parameter>
+</ac:structured-macro>
+
+<ac:structured-macro ac:name="info" ac:schema-version="1">
+  <ac:rich-text-body>
+    <p><strong>Who is this page for?</strong> Everyone taking part in the Invoice Processor testing phase. No technical knowledge required. If anything on this page does not match what you see on screen, please report it — that is exactly the kind of feedback the test phase is for.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>1. What this tool does</h2>
+<p>The Invoice Processor turns supplier invoice PDFs into ready-to-upload bank payment files. You upload invoices, the tool reads them automatically, you double-check anything it was unsure about, and at the end you download one payment file (pain.001 XML) per bank, ready for e-banking.</p>
+<p>It reads invoices in two ways:</p>
+<ul>
+  <li><strong>Swiss QR code</strong> — if the invoice has a Swiss QR payment part, the data is taken directly from the code. This is exact and instant.</li>
+  <li><strong>AI extraction</strong> — if there is no QR code (or fields are missing), an AI reads the invoice text and page images and fills in the payment details. AI results are good but not infallible — that is why the review step exists.</li>
+</ul>
+<p>In short: <strong>Upload → AI Extraction → Review → Export</strong>.</p>
+
+<h2>2. Getting access</h2>
+<ol>
+  <li>Open the test link: <a href="https://x3m2th39-8743.euw.devtunnels.ms">https://x3m2th39-8743.euw.devtunnels.ms</a></li>
+  <li>Sign in with your <strong>normal Lyfegen Microsoft account</strong> (the same one you use for Outlook/Teams). Only Lyfegen accounts are allowed in.</li>
+  <li>On your very first visit you will see a Microsoft notice page asking you to confirm you trust this address — click <strong>Continue</strong>. This appears once and is normal, not an error.</li>
+</ol>
+<ac:structured-macro ac:name="note" ac:schema-version="1">
+  <ac:rich-text-body>
+    <p>During the testing phase the tool runs on a Lyfegen laptop, not on a server. If the page does not load, the test instance is simply offline at that moment — message Sasha Bieri and it will be started again. Nothing is broken and no data is lost.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>3. How to use it, step by step</h2>
+
+<h3>Step 1 — Upload invoices</h3>
+<ul>
+  <li>Click <strong>+ Upload PDFs</strong> or simply drag PDF files anywhere onto the page.</li>
+  <li>Only <strong>.pdf</strong> files are accepted — other file types are ignored without a message.</li>
+  <li>Each invoice appears as a row in the table. Invoices with a Swiss QR code are read immediately; the rest wait for AI extraction.</li>
+</ul>
+
+<h3>Step 2 — Run AI extraction</h3>
+<ul>
+  <li>When there are invoices waiting, a <strong>✦ Run AI Extraction</strong> button appears at the top. Click it once.</li>
+  <li>The table updates automatically every couple of seconds while the AI works. You do not need to refresh the page.</li>
+  <li>When it finishes, each invoice is either complete (<em>LLM-Done</em>) or flagged for your attention (<em>Needs review</em>).</li>
+</ul>
+
+<h3>Step 3 — Review and correct</h3>
+<ul>
+  <li>Click the <strong>✎</strong> (pencil) icon on a row to open the invoice. You see the original PDF on one side and the editable payment fields on the other.</li>
+  <li>Field colours: <span style="color: rgb(255,0,0);"><strong>red</strong></span> = required and still missing, <span style="color: rgb(0,128,0);"><strong>green</strong></span> = filled, yellow = optional.</li>
+  <li>Four fields are always required before export: <strong>Receiver, IBAN, Amount, Currency</strong>.</li>
+  <li>The small chip next to the IBAN tells you where it came from:
+    <ul>
+      <li><strong>doc ✓</strong> — read from the invoice itself (QR or document); matches our records.</li>
+      <li><strong>doc ⚠</strong> — read from the invoice, but it <em>differs</em> from the IBAN we have stored for this supplier. Check carefully (see section 5).</li>
+      <li><strong>DB</strong> — taken from our stored supplier list.</li>
+      <li><strong>llm</strong> — found by the AI on the document.</li>
+      <li><strong>manual</strong> — typed in by a person.</li>
+    </ul>
+  </li>
+  <li>Use the coloured <strong>bank pills</strong> below the form to assign the invoice to a paying bank (e.g. BKB, Raiffeisen) or to MANUAL if it should not go into a payment file.</li>
+  <li>Click <strong>Save</strong>, or <strong>Save &amp; Next</strong> to jump straight to the next invoice needing attention.</li>
+</ul>
+
+<h3>Step 4 — Export the payment files</h3>
+<ul>
+  <li>Click <strong>Export →</strong> at the top. You get a board with one column per bank plus an "Unsorted" column.</li>
+  <li>Drag invoices into the bank column that should pay them. Invoices that are not ready (still in review, or no matching bank account configured) are locked and stay in MANUAL.</li>
+  <li>Click <strong>✓ Accept &amp; Download</strong>. The tool generates one pain.001 XML file per bank, bundles them into a ZIP, and downloads it. These XML files are what gets uploaded to e-banking.</li>
+  <li>Exported invoices are <strong>archived</strong> automatically — they disappear from the main view but are kept in the database.</li>
+  <li>If something still blocks the export, a popup lists exactly which invoices and what is missing — fix those on the dashboard first.</li>
+</ul>
+
+<h3>Other functions</h3>
+<ul>
+  <li><strong>Vendors</strong> — the stored supplier list (name + IBAN). The tool uses it to auto-fill and cross-check IBANs. You can add or update suppliers here.</li>
+  <li><strong>Analytics</strong> — how many invoices were processed and what the AI usage cost.</li>
+  <li><strong>CSV export</strong> — downloads the current invoice table as a spreadsheet.</li>
+</ul>
+<ac:structured-macro ac:name="warning" ac:schema-version="1">
+  <ac:rich-text-body>
+    <p><strong>Clear all</strong> permanently deletes every non-archived invoice for <em>everyone</em>, with no undo. During the test phase, please only use it when agreed with the team.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>4. What the statuses mean</h2>
+<table>
+  <tbody>
+    <tr>
+      <th><p>Status</p></th>
+      <th><p>Meaning</p></th>
+      <th><p>What you should do</p></th>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Blue</ac:parameter><ac:parameter ac:name="title">QR-processed</ac:parameter></ac:structured-macro></p></td>
+      <td><p>Swiss QR code found and read. Some fields may still be missing.</p></td>
+      <td><p>Run AI extraction if fields are missing; otherwise nothing.</p></td>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Grey</ac:parameter><ac:parameter ac:name="title">LLM-Pending</ac:parameter></ac:structured-macro></p></td>
+      <td><p>Uploaded, waiting for AI extraction.</p></td>
+      <td><p>Click <strong>✦ Run AI Extraction</strong>.</p></td>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Green</ac:parameter><ac:parameter ac:name="title">LLM-Done</ac:parameter></ac:structured-macro></p></td>
+      <td><p>All required fields are filled. Ready for export.</p></td>
+      <td><p>Assign to a bank and export.</p></td>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Red</ac:parameter><ac:parameter ac:name="title">needs_review</ac:parameter></ac:structured-macro></p></td>
+      <td><p>The tool needs a human decision — something is missing or looks wrong.</p></td>
+      <td><p>Open the invoice (✎) and fix it — see section 5.</p></td>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Grey</ac:parameter><ac:parameter ac:name="title">archived</ac:parameter></ac:structured-macro></p></td>
+      <td><p>Already exported. Hidden from the normal view, kept in the database.</p></td>
+      <td><p>Nothing.</p></td>
+    </tr>
+    <tr>
+      <td><p><ac:structured-macro ac:name="status" ac:schema-version="1"><ac:parameter ac:name="colour">Red</ac:parameter><ac:parameter ac:name="title">error</ac:parameter></ac:structured-macro></p></td>
+      <td><p>Something went wrong technically with this file (e.g. it could not be saved or processed).</p></td>
+      <td><p>Delete the row and upload the PDF again. If it happens repeatedly, report it.</p></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5. "Needs review" — why it happens and how to fix it</h2>
+<p>An invoice goes into <em>Needs review</em> whenever the tool is not confident enough to put it into a payment file on its own. This is a safety feature, not a malfunction. These are all the cases:</p>
+<table>
+  <tbody>
+    <tr>
+      <th><p>Case</p></th>
+      <th><p>Why it happens</p></th>
+      <th><p>How to fix it</p></th>
+    </tr>
+    <tr>
+      <td><p>AI could not read the invoice at all</p></td>
+      <td><p>Poor scan quality, unusual layout, or the AI service was unavailable.</p></td>
+      <td><p>Open the invoice (✎) and type the four required fields (Receiver, IBAN, Amount, Currency) by hand from the PDF shown next to the form.</p></td>
+    </tr>
+    <tr>
+      <td><p>A required field is missing</p></td>
+      <td><p>The AI read the invoice but could not find one of: Receiver, IBAN, Amount, Currency.</p></td>
+      <td><p>Fill in the fields shown in red, then save.</p></td>
+    </tr>
+    <tr>
+      <td><p>IBAN looks invalid</p></td>
+      <td><p>The IBAN failed the standard checksum — usually a misread digit.</p></td>
+      <td><p>Compare the IBAN character by character against the invoice and correct it. The form re-checks it when you save.</p></td>
+    </tr>
+    <tr>
+      <td><p>Foreign-currency invoice without BIC</p></td>
+      <td><p>Payments in currencies other than CHF need the receiving bank's BIC/SWIFT code, which was not on the invoice.</p></td>
+      <td><p>Find the supplier's BIC (it is often on the invoice footer or the supplier's website) and enter it in the BIC field.</p></td>
+    </tr>
+    <tr>
+      <td><p>IBAN differs from our supplier records (<strong>doc ⚠</strong> chip)</p></td>
+      <td><p>The IBAN on this invoice is different from the IBAN we have stored for this supplier. This can be legitimate (supplier changed banks) — or a sign of a manipulated invoice.</p></td>
+      <td><p><strong>Treat this seriously.</strong> Verify the new IBAN through a known channel (supplier portal, a phone number you already have — not one printed on the suspicious invoice). If the new IBAN is genuine, click <strong>↑ Update vendor IBAN</strong> to update our records. If unsure, ask before paying.</p></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>6. Problems and error messages</h2>
+<table>
+  <tbody>
+    <tr>
+      <th><p>What you see</p></th>
+      <th><p>Likely cause</p></th>
+      <th><p>What to do</p></th>
+    </tr>
+    <tr>
+      <td><p>The page does not load at all</p></td>
+      <td><p>The test instance is offline (laptop asleep or tunnel stopped).</p></td>
+      <td><p>Message Sasha Bieri. No data is lost.</p></td>
+    </tr>
+    <tr>
+      <td><p>Microsoft sign-in refuses you / "access denied"</p></td>
+      <td><p>You used a private Microsoft account, or the access grant has expired (it renews monthly).</p></td>
+      <td><p>Make sure you sign in with your Lyfegen account. If it still fails, report it — the access grant probably needs renewing.</p></td>
+    </tr>
+    <tr>
+      <td><p>A notice page asks you to "Continue" before showing the app</p></td>
+      <td><p>Microsoft's standard first-visit confirmation for tunnel links.</p></td>
+      <td><p>Click <strong>Continue</strong>. Appears only on the first visit.</p></td>
+    </tr>
+    <tr>
+      <td><p>Upload does nothing</p></td>
+      <td><p>The file is not a PDF (e.g. JPG, Word, email attachment saved wrongly).</p></td>
+      <td><p>Save/convert the invoice as a PDF and upload again.</p></td>
+    </tr>
+    <tr>
+      <td><p>Invoices stay in <em>LLM-Pending</em> / extraction button does nothing</p></td>
+      <td><p>The AI service key is not configured or the AI service is temporarily unavailable.</p></td>
+      <td><p>Report it. (Admin: check the Anthropic API key in Settings.)</p></td>
+    </tr>
+    <tr>
+      <td><p>Status <em>error</em> (red) on a row</p></td>
+      <td><p>The file could not be saved or processed.</p></td>
+      <td><p>Delete the row and upload the PDF again; report if it repeats.</p></td>
+    </tr>
+    <tr>
+      <td><p>Export popup: "blocked" list of invoices</p></td>
+      <td><p>Some invoices are not ready (in review, in error, or extraction not yet run).</p></td>
+      <td><p>The popup names each invoice and what is missing. Fix them on the dashboard, then export again.</p></td>
+    </tr>
+    <tr>
+      <td><p>Export error: "no debtor account for BANK/CURRENCY"</p></td>
+      <td><p>An invoice is in a currency for which that bank has no paying account configured in Settings.</p></td>
+      <td><p>Report it. (Admin: in Settings, add an account for that currency to the bank, or set the bank's default currency account.)</p></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>7. Settings reference</h2>
+<ac:structured-macro ac:name="warning" ac:schema-version="1">
+  <ac:rich-text-body>
+    <p>During the testing phase everyone shares <strong>one</strong> set of settings. Changing them affects all testers immediately. Please do not change settings unless asked to.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+<p>The ⚙ Settings popup contains:</p>
+<table>
+  <tbody>
+    <tr>
+      <th><p>Setting</p></th>
+      <th><p>What it is</p></th>
+      <th><p>Rules</p></th>
+    </tr>
+    <tr>
+      <td><p>Payee / debtor name</p></td>
+      <td><p>Our company name as it appears on the payment files (we are the payer).</p></td>
+      <td><p>Required for export.</p></td>
+    </tr>
+    <tr>
+      <td><p>Anthropic API key</p></td>
+      <td><p>The key that enables the AI extraction service. On a fresh installation the tool asks for it once at first start.</p></td>
+      <td><p>Required for AI extraction. No spaces.</p></td>
+    </tr>
+    <tr>
+      <td><p>AI model</p></td>
+      <td><p>Which AI model reads the invoices. Leave at the default unless instructed.</p></td>
+      <td><p>Optional.</p></td>
+    </tr>
+    <tr>
+      <td><p>Banks</p></td>
+      <td><p>The banks we pay from (e.g. BKB, RAIFFEISEN). Each bank lists the currencies it handles and a default currency.</p></td>
+      <td><p>Bank names: letters only, no duplicates. At least one currency per bank; currencies are 3-letter codes (CHF, EUR, …).</p></td>
+    </tr>
+    <tr>
+      <td><p>Accounts per bank</p></td>
+      <td><p>For each currency a bank pays in: the IBAN of our account (and its BIC). Invoices in that currency are debited from that account. A bank-level BIC can serve as fallback for all its accounts.</p></td>
+      <td><p>IBANs are checksum-validated ("IBAN fails checksum — please re-check" means a typo). BIC must be 8 or 11 characters.</p></td>
+    </tr>
+  </tbody>
+</table>
+<p>Saving applies changes immediately — no restart needed. If a value is invalid, a red message under the save button explains which field to correct.</p>
+
+<h2>8. Security measures</h2>
+<p>This tool handles financial data (supplier IBANs, amounts, invoice documents). These are the protections in place during the testing phase, and what is planned for production:</p>
+
+<h3>Access control</h3>
+<ul>
+  <li>The test link is <strong>restricted to the Lyfegen Microsoft 365 organisation</strong>. Every visitor must sign in with their personal corporate account — there is no shared password that could leak.</li>
+  <li>Access is granted and revoked centrally; it expires automatically after at most 30 days unless renewed. IT can disable the tunnel service organisation-wide by policy at any time.</li>
+</ul>
+
+<h3>Data in transit</h3>
+<ul>
+  <li>All traffic between your browser and the tool is <strong>encrypted (HTTPS, TLS 1.2 or higher)</strong>, relayed through Microsoft Azure infrastructure with Microsoft-issued certificates. Nothing travels unencrypted.</li>
+</ul>
+
+<h3>Data at rest</h3>
+<ul>
+  <li>Uploaded invoices and all extracted data are stored <strong>only on the Lyfegen host machine</strong> (local database and file folder). The application itself stores nothing in any cloud.</li>
+  <li>Every invoice records an audit trail: where each IBAN came from (document, supplier database, AI, or manual entry), any mismatch against supplier records, and creation/modification timestamps.</li>
+</ul>
+
+<h3>AI processing</h3>
+<ul>
+  <li>For extraction, the invoice's text and page images are sent to the <strong>Anthropic API</strong> (the company behind the Claude AI models) solely to read out the payment fields.</li>
+  <li>Under Anthropic's commercial terms, API data is <strong>not used to train AI models</strong>. Only usage metadata (token counts for cost tracking) is kept locally.</li>
+  <li>The API key is stored in a local settings file on the host machine and is never shown in the interface or sent anywhere except to Anthropic.</li>
+</ul>
+
+<h3>Fraud protection in the workflow</h3>
+<ul>
+  <li>IBANs are checksum-validated; invalid ones block export.</li>
+  <li>If an invoice shows a <strong>different IBAN than our supplier records</strong>, it is flagged (doc ⚠) and held for human review — this is the primary defence against invoice-fraud attempts (see section 5).</li>
+  <li>Nothing is paid automatically: a human always reviews flagged invoices, assigns banks, and the final payment file still goes through the normal e-banking approval process.</li>
+</ul>
+
+<h3>Planned for production (Azure)</h3>
+<ul>
+  <li>Deployment to a managed Azure environment behind Microsoft Entra ID sign-in and HTTPS.</li>
+  <li>Secrets (API keys) held in Azure Key Vault / App Settings instead of files.</li>
+  <li>The application additionally supports its own username/password layer (HTTP Basic auth), which will be enabled for any exposure beyond the organisation.</li>
+</ul>
+<ac:structured-macro ac:name="note" ac:schema-version="1">
+  <ac:rich-text-body>
+    <p><strong>Known limitation of the test phase:</strong> all testers share one workspace — everyone sees all uploaded invoices, and the settings are shared. Production will revisit this. Please only upload invoices that all testers may see.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>9. Test-phase limitations &amp; contact</h2>
+<ul>
+  <li><strong>Availability:</strong> the tool runs on a Lyfegen laptop. It is reachable only while that machine is awake and the tunnel is running. Outside those times the link simply will not load.</li>
+  <li><strong>Monthly renewal:</strong> the tunnel and its access grant expire after 30 days of inactivity / 30 days respectively and are renewed as part of the test.</li>
+  <li><strong>Shared workspace:</strong> see the note in section 8.</li>
+</ul>
+<p><strong>Contact / feedback:</strong> Sasha Bieri (sasha.bieri@lyfegen.com). Please report every confusing message, wrong extraction, or unclear step — that feedback shapes the production version.</p>

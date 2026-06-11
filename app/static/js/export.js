@@ -2,6 +2,11 @@
 let jobs = [];
 let blockedIds = new Set();  // job IDs with unresolvable account or cross-border gap
 let acctSummary = {};        // {BANK: {default_ccy, resolve:{ccy:acct_ccy}}} — which acct each ccy debits
+let bankList = [];           // configured banks, ordered (excludes MANUAL)
+
+function _boardColumns() {
+  return [...bankList, 'MANUAL'];
+}
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -11,9 +16,13 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
-// needs_review always lands in unsorted column regardless of bank_target
+// needs_review always lands in unsorted column regardless of bank_target.
+// A bank_target no longer in the config (bank removed via settings) also
+// falls back to MANUAL so the card stays visible and re-assignable.
 function _effectiveBank(job) {
-  return job.status === 'needs_review' ? 'MANUAL' : (job.bank_target || 'MANUAL');
+  if (job.status === 'needs_review') return 'MANUAL';
+  const b = job.bank_target || 'MANUAL';
+  return b === 'MANUAL' || bankList.includes(b) ? b : 'MANUAL';
 }
 
 // ── READINESS HELPERS ──
@@ -38,8 +47,8 @@ function _acctFor(bank, ccy) {
 
 async function fetchAccountsSummary() {
   try {
-    const res = await fetch('/api/accounts-summary');
-    if (res.ok) acctSummary = await res.json();
+    acctSummary = await fetchBanksSummary();  // banks.js — shared cache
+    bankList = Object.keys(acctSummary);
   } catch (err) {
     console.error('[export] accounts-summary fetch failed:', err);
   }
@@ -56,6 +65,7 @@ async function initExport() {
     if (!jobsRes.ok) throw new Error(`Failed to fetch jobs: ${jobsRes.status}`);
     jobs = await jobsRes.json();
     window._jobsCache = jobs;  // modal.js reads from window._jobsCache
+    buildBoard();
     render();
   } catch (err) {
     console.error('[export] init failed:', err);
@@ -63,11 +73,35 @@ async function initExport() {
   }
 }
 
+// ── BOARD ──
+// One column per configured bank (from /api/accounts-summary) + Unsorted, so
+// banks added in the settings popup get a drop zone without code changes.
+function buildBoard() {
+  const board = document.getElementById('board');
+  board.innerHTML = _boardColumns().map(bank => {
+    const manual = bank === 'MANUAL';
+    const color = manual ? 'var(--amber)' : bankColor(bank, bankList);
+    const meta = manual
+      ? 'Needs manual assignment'
+      : Object.keys((acctSummary[bank] || {}).resolve || {}).join(' · ') || '—';
+    return `
+    <div class="bank-col">
+      <div class="bank-header" style="border-top:3px solid ${color}">
+        <div class="bank-name">${esc(bankLabel(bank))}</div>
+        <div class="bank-meta">${esc(meta)}</div>
+        <div class="bank-total" id="total-${esc(bank)}">—</div>
+      </div>
+      <div class="drop-zone" id="zone-${esc(bank)}" ondragover="onDragOver(event)"
+           ondrop="onDrop(event,'${esc(bank)}')" ondragleave="onDragLeave(event)"></div>
+    </div>`;
+  }).join('');
+}
+
 // ── RENDER ──
 function render() {
-  ['BKB', 'RAIFFEISEN', 'MANUAL'].forEach(bank => {
-    const zoneId = bank === 'RAIFFEISEN' ? 'zone-raiff' : bank === 'BKB' ? 'zone-bkb' : 'zone-unsorted';
-    const el = document.getElementById(zoneId);
+  _boardColumns().forEach(bank => {
+    const el = document.getElementById(`zone-${bank}`);
+    if (!el) return;
     el.innerHTML = '';
     jobs.filter(j => _effectiveBank(j) === bank).forEach(job => {
       el.appendChild(makeCard(job));
@@ -161,8 +195,8 @@ async function onDrop(e, bank) {
 
 // ── STATS ──
 function updateStats() {
-  const counts = { BKB: 0, RAIFFEISEN: 0, MANUAL: 0 };
-  const totals = { BKB: {}, RAIFFEISEN: {}, MANUAL: {} };
+  const counts = {}, totals = {};
+  _boardColumns().forEach(b => { counts[b] = 0; totals[b] = {}; });
 
   jobs.forEach(j => {
     const bank = _effectiveBank(j);
@@ -172,9 +206,9 @@ function updateStats() {
     totals[bank][cur] += parseFloat(j.amount) || 0;
   });
 
-  document.getElementById('stat-bkb').textContent = counts.BKB;
-  document.getElementById('stat-raiff').textContent = counts.RAIFFEISEN;
-  document.getElementById('stat-unsorted').textContent = counts.MANUAL;
+  document.getElementById('bank-stats').innerHTML = _boardColumns()
+    .map(b => `${esc(b === 'MANUAL' ? 'Unsorted' : bankLabel(b))}: <span>${counts[b]}</span>`)
+    .join(' &nbsp;·&nbsp; ');
   document.getElementById('invoice-count').textContent = `${jobs.length} invoices`;
 
   // Per-currency sub-totals, grouped by the debtor account each block debits.
@@ -200,9 +234,12 @@ function updateStats() {
     }).join('');
   };
 
-  document.getElementById('bkb-total').innerHTML = formatTotal('BKB');
-  document.getElementById('raiff-total').innerHTML = formatTotal('RAIFFEISEN');
-  document.getElementById('unsorted-count').textContent = `${counts.MANUAL} invoices`;
+  _boardColumns().forEach(bank => {
+    const el = document.getElementById(`total-${bank}`);
+    if (!el) return;
+    if (bank === 'MANUAL') el.textContent = `${counts.MANUAL} invoices`;
+    else el.innerHTML = formatTotal(bank);
+  });
 
   // Show unsorted warning
   const warn = document.getElementById('unsorted-warn');
@@ -220,7 +257,8 @@ async function acceptAndDownload() {
 
   // If any unsorted, confirm
   if (unsorted > 0) {
-    const ok = confirm(`${unsorted} invoice(s) will NOT be exported.\n\nProceed with BKB + Raiffeisen files?`);
+    const names = bankList.map(bankLabel).join(' + ') || 'bank';
+    const ok = confirm(`${unsorted} invoice(s) will NOT be exported.\n\nProceed with ${names} files?`);
     if (!ok) return;
   }
 

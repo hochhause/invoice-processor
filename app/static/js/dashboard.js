@@ -164,9 +164,8 @@ function ibanSourceChip(source, mismatchDb) {
 
 function bankChip(bank) {
   if (!bank) return '';
-  const map = { BKB: 'chip-bkb', RAIFFEISEN: 'chip-raiff', MANUAL: 'chip-manual' };
-  const cls = map[bank] || '';
-  return `<span class="chip ${cls}">${bank}</span>`;
+  const c = bankColor(bank);  // banks.js — config-driven palette
+  return `<span class="chip" style="background:${c}26;color:${c}">${esc(bank)}</span>`;
 }
 
 function esc(s) {

@@ -5,7 +5,6 @@ services:
       - "8080:8000"
     volumes:
       - invoice_processor_data:/app/data  # named volume (outside OneDrive sync)
-      - ./rules:/app/rules                # bank CSV rule sets (hot-reload without rebuild)
     env_file:
       - .env
     restart: unless-stopped
